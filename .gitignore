@@ -21,6 +21,12 @@ Makefile
 *.so
 *.dylib
 *.dll
+!dist/
+!dist/*.a
+!dist/*.lib
+!dist/*.so
+!dist/*.dylib
+!dist/*.dll
 
 # Executables
 liquidgen
