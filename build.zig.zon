@@ -1,0 +1,22 @@
+.{
+    .name = .lfg,
+    .version = "0.0.0",
+    .fingerprint = 0x5efdd38c8310d9bc,
+    .minimum_zig_version = "0.15.2",
+    .dependencies = .{
+        .spdlog = .{
+            .url = "https://github.com/gabime/spdlog/archive/refs/tags/v1.12.0.tar.gz",
+            .hash = "N-V-__8AAG3QEAByVfqHowtggiV2ew50WieLRYslNPG00-un",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "third_party",
+        "scripts",
+        "GEMINI.md",
+        "license.cpp",
+        ".gitignore",
+    },
+}

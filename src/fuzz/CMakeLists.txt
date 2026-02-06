@@ -1,0 +1,26 @@
+if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    message(WARNING "Fuzzers require Clang with libFuzzer support; skipping fuzz targets")
+    return()
+endif()
+
+set(LFG_FUZZER_SANITIZERS "${LFG_FUZZ_SANITIZERS}")
+if(LFG_FUZZER_SANITIZERS STREQUAL "")
+    set(LFG_FUZZER_SANITIZERS "address,undefined")
+endif()
+
+set(LFG_FUZZER_FLAGS "-fsanitize=fuzzer,${LFG_FUZZER_SANITIZERS}")
+set(LFG_FUZZER_LINKER "")
+if(CMAKE_CXX_COMPILER MATCHES "llvm")
+    set(LFG_FUZZER_LINKER "-fuse-ld=lld")
+endif()
+
+function(lfg_add_fuzzer name source)
+    add_executable(${name} ${source})
+    target_link_libraries(${name} PRIVATE lfm_core)
+    target_include_directories(${name} PRIVATE ../inference)
+    target_compile_options(${name} PRIVATE -O1 -g -fno-omit-frame-pointer ${LFG_FUZZER_FLAGS})
+    target_link_options(${name} PRIVATE ${LFG_FUZZER_FLAGS} ${LFG_FUZZER_LINKER})
+endfunction()
+
+lfg_add_fuzzer(fuzz_chat_template fuzz_chat_template.cpp)
+lfg_add_fuzzer(fuzz_model_load fuzz_model_load.cpp)

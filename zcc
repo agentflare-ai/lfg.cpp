@@ -1,0 +1,4 @@
+#!/bin/sh
+export ZIG_GLOBAL_CACHE_DIR=/tmp/zig-gamma-global
+export ZIG_LOCAL_CACHE_DIR=/tmp/zig-gamma-local
+zig cc "$@"

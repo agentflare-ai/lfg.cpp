@@ -1,0 +1,30 @@
+set(LFM_VERSION      @LFM_INSTALL_VERSION@)
+set(LFM_BUILD_COMMIT @LFM_BUILD_COMMIT@)
+set(LFM_BUILD_NUMBER @LFM_BUILD_NUMBER@)
+set(LFM_SHARED_LIB   @BUILD_SHARED_LIBS@)
+
+@PACKAGE_INIT@
+
+set_and_check(LFM_INCLUDE_DIR "@PACKAGE_LFM_INCLUDE_INSTALL_DIR@")
+set_and_check(LFM_LIB_DIR     "@PACKAGE_LFM_LIB_INSTALL_DIR@")
+set_and_check(LFM_BIN_DIR     "@PACKAGE_LFM_BIN_INSTALL_DIR@")
+
+find_package(ggml REQUIRED HINTS ${LFM_LIB_DIR}/cmake)
+
+find_library(lfm_LIBRARY liquid
+    REQUIRED
+    HINTS ${LFM_LIB_DIR}
+    NO_CMAKE_FIND_ROOT_PATH
+)
+
+add_library(liquid UNKNOWN IMPORTED)
+set_target_properties(liquid
+    PROPERTIES
+        INTERFACE_INCLUDE_DIRECTORIES "${LFM_INCLUDE_DIR}"
+        INTERFACE_LINK_LIBRARIES "ggml::ggml;ggml::ggml-base;"
+        IMPORTED_LINK_INTERFACE_LANGUAGES "CXX"
+        IMPORTED_LOCATION "${lfm_LIBRARY}"
+        INTERFACE_COMPILE_FEATURES c_std_90
+        POSITION_INDEPENDENT_CODE ON)
+
+check_required_components(Liquid)

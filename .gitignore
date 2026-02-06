@@ -1,0 +1,48 @@
+# Build directories
+build/
+out/
+bin/
+zig-out/
+.zig-cache/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+!src/cmake/*.cmake
+
+# C++ objects and libs
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dylib
+*.dll
+
+# Executables
+liquidgen
+*.exe
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
+.DS_Store
+.thumbs
+/models/
+*build*/
+.env.sh
+.cache/
+
+# Generated artifacts
+compile_commands.json
+.snapshot/
+*.bak
+*.diff
+test_models/*.gguf

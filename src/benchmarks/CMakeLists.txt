@@ -1,0 +1,11 @@
+add_executable(benchmark_json_schema benchmark_json_schema.cpp)
+target_link_libraries(benchmark_json_schema PRIVATE lfm_core lfm_ggml)
+target_compile_features(benchmark_json_schema PRIVATE cxx_std_17)
+
+add_executable(benchmark_healing_structured benchmark_healing_structured.cpp)
+target_link_libraries(benchmark_healing_structured PRIVATE lfm_core lfm_ggml)
+target_compile_features(benchmark_healing_structured PRIVATE cxx_std_17)
+
+add_executable(benchmark_tool_healing benchmark_tool_healing.cpp)
+target_link_libraries(benchmark_tool_healing PRIVATE lfm_core lfm_ggml)
+target_compile_features(benchmark_tool_healing PRIVATE cxx_std_17)

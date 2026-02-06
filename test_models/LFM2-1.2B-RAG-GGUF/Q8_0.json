@@ -1,0 +1,14 @@
+{
+  "inference_type": "llama.cpp/text-to-text",
+  "schema_version": "1.0.0",
+  "load_time_parameters": {
+    "model": "https://huggingface.co/LiquidAI/LFM2-1.2B-RAG-GGUF/resolve/main/LFM2-1.2B-RAG-Q8_0.gguf"
+  },
+  "generation_time_parameters": {
+    "sampling_parameters": {
+      "temperature": 0.3,
+      "min_p": 0.15,
+      "repetition_penalty": 1.05
+    }
+  }
+}
