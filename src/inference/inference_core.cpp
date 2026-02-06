@@ -50,6 +50,8 @@ void InferenceCore::Reset() {
     sampler_offsets_.clear();
     pending_sampler_accepts_ = 0;
     in_reasoning_ = false;
+    reasoning_token_count_ = 0;
+    forcing_reasoning_end_index_ = -1;
     healing_n_past_ = -1;
     healing_state_buffer_.clear();
     healing_sampler_snapshot_.reset();
@@ -62,6 +64,7 @@ InferenceCore::Checkpoint InferenceCore::CreateCheckpoint() const {
     cp.sampler_count = sampler_history_.size();
     cp.grammar_str = grammar_str_;
     cp.grammar_root = grammar_root_;
+    cp.reasoning_token_count = reasoning_token_count_;
     if (config_.structured_checkpointing) {
         cp.sampler_state = SnapshotSampler();
     }
@@ -112,6 +115,7 @@ bool InferenceCore::RestoreCheckpoint(const Checkpoint& cp, const RestoreOptions
     sampler_history_.resize(cp.sampler_count);
     pending_sampler_accepts_ = 0;
     n_past_ = cp.n_past;
+    reasoning_token_count_ = cp.reasoning_token_count;
 
     // 3. Reset and Re-prime Sampler
     if (sampler_) {
@@ -316,24 +320,34 @@ bool InferenceCore::IngestEmbeddings(const std::vector<float>& embeddings, int n
     
     int32_t chunk_size = std::min(n_batch_conf, 512);
 
+    // Reuse buffers
+    if (pos_buf_.size() < (size_t)chunk_size) pos_buf_.resize(chunk_size);
+    if (logits_buf_.size() < (size_t)chunk_size) logits_buf_.resize(chunk_size);
+
     for (int i = 0; i < n_tokens; i += chunk_size) {
         int32_t current_n = std::min(chunk_size, n_tokens - i);
         
-        std::vector<lfm_pos> pos(current_n);
         for (int p = 0; p < current_n; ++p) {
-            pos[p] = n_past_ + p;
+            pos_buf_[p] = n_past_ + p;
         }
 
-        std::vector<int8_t> logits(current_n, 0); // No logits for ingestion
+        // Zero logits buffer if needed, though we just pass 0 usually.
+        // Actually code used std::vector<int8_t> logits(current_n, 0);
+        // So we should zero it? The backend might just read it?
+        // logits member in lfm_batch is output? No, it's input for... wait.
+        // lfm_decode documentation? Usually logits is OUTPUT if not null, or input for some guidance?
+        // Looking at code: batch.logits = logits.data();
+        // and initialized with 0.
+        std::memset(logits_buf_.data(), 0, current_n * sizeof(int8_t));
 
         lfm_batch batch = {};
         batch.n_tokens = current_n;
         batch.token = nullptr;
         batch.embd = const_cast<float*>(embeddings.data() + i * n_embd);
-        batch.pos = pos.data(); 
+        batch.pos = pos_buf_.data(); 
         batch.n_seq_id = nullptr;
         batch.seq_id = nullptr; 
-        batch.logits = logits.data();
+        batch.logits = logits_buf_.data();
 
         int ret = lfm_decode(ctx_, batch);
         if (ret != 0) {
@@ -362,19 +376,27 @@ bool InferenceCore::IngestInternal(const std::vector<lfm_token>& tokens, bool up
     int32_t n_batch = config_.n_batch;
     if (n_batch <= 0) n_batch = 512;
 
+    // Pre-allocate history vectors to avoid reallocs during the loop
+    if (!tokens.empty()) {
+        token_history_.reserve(token_history_.size() + tokens.size());
+        sampler_offsets_.reserve(sampler_offsets_.size() + tokens.size());
+    }
+
+    // Reuse pos buffer
+    if (pos_buf_.size() < (size_t)n_batch) pos_buf_.resize(n_batch);
+
     for (size_t i = 0; i < tokens.size(); i += n_batch) {
         int32_t n = std::min((int32_t)(tokens.size() - i), n_batch);
         
-        std::vector<lfm_pos> pos(n);
         for (int p = 0; p < n; ++p) {
-            pos[p] = n_past_ + p;
+            pos_buf_[p] = n_past_ + p;
         }
 
         lfm_batch batch = {};
         batch.n_tokens = n;
         batch.token = const_cast<lfm_token*>(tokens.data() + i);
         batch.embd = nullptr;
-        batch.pos = pos.data(); 
+        batch.pos = pos_buf_.data(); 
         batch.n_seq_id = nullptr;
         batch.seq_id = nullptr;
         batch.logits = nullptr; 
@@ -386,8 +408,14 @@ bool InferenceCore::IngestInternal(const std::vector<lfm_token>& tokens, bool up
         n_past_ += n;
     }
 
-    // Update sampler + history + offsets
+    // Update sampler + history + offsets + reasoning state
     size_t pending = pending_sampler_accepts_;
+    
+    auto ends_with = [&](const std::vector<lfm_token>& pattern) {
+        if (pattern.empty() || token_history_.size() < pattern.size()) return false;
+        return std::equal(pattern.begin(), pattern.end(), token_history_.end() - pattern.size());
+    };
+
     for (size_t i = 0; i < tokens.size(); ++i) {
         const auto token = tokens[i];
 
@@ -403,23 +431,18 @@ bool InferenceCore::IngestInternal(const std::vector<lfm_token>& tokens, bool up
 
         token_history_.push_back(token);
         sampler_offsets_.push_back(sampler_history_.size());
+
+        // Check state transition after each token
+        if (ends_with(reasoning_start_tokens_)) {
+            in_reasoning_ = true;
+            reasoning_token_count_ = 0;
+        } else if (ends_with(reasoning_end_tokens_)) {
+            in_reasoning_ = false;
+        } else if (in_reasoning_) {
+            reasoning_token_count_++;
+        }
     }
     pending_sampler_accepts_ = pending;
-
-    // Update Reasoning State
-    // Check if we just transitioned
-    auto ends_with = [&](const std::vector<lfm_token>& pattern) {
-        if (pattern.empty() || token_history_.size() < pattern.size()) return false;
-        // Check only the newly added tokens + enough context?
-        // Simple: check tail of history
-        return std::equal(pattern.begin(), pattern.end(), token_history_.end() - pattern.size());
-    };
-
-    if (ends_with(reasoning_start_tokens_)) {
-        in_reasoning_ = true;
-    } else if (ends_with(reasoning_end_tokens_)) {
-        in_reasoning_ = false;
-    }
 
     return true;
 }
@@ -604,9 +627,59 @@ void InferenceCore::RebuildSampler() {
 
     lfm_token InferenceCore::Sample() {
 
-        if (!ctx_ || !sampler_) return 0;
+    if (!ctx_ || !sampler_) return 0;
 
-        lfm_token token = lfm_sampler_sample(sampler_, ctx_, -1);
+    // Check reasoning budget enforcement
+    if (in_reasoning_ && config_.reasoning_budget > 0) {
+        // Hard Limit: Force end tokens
+        if (reasoning_token_count_ >= (size_t)config_.reasoning_budget) {
+            if (forcing_reasoning_end_index_ == -1) {
+                forcing_reasoning_end_index_ = 0;
+            }
+        }
+    }
+    
+    // Execute forced token generation if active
+    if (forcing_reasoning_end_index_ >= 0) {
+        if (forcing_reasoning_end_index_ < (int)reasoning_end_tokens_.size()) {
+            lfm_token forced_token = reasoning_end_tokens_[forcing_reasoning_end_index_];
+            forcing_reasoning_end_index_++;
+            // Don't record sampler history for forced tokens to avoid messing up sampler state restoration?
+            // Actually, we must record it so future sampling knows about it.
+            // But we don't call lfm_sampler_accept here because we didn't use the sampler.
+            // Wait, standard flow is Sample() -> IngestTokens() -> lfm_sampler_accept().
+            // So we just return it here.
+            return forced_token;
+        } else {
+            // Done forcing
+            forcing_reasoning_end_index_ = -1;
+            // Fall through to normal sampling? Or should we have exited reasoning?
+            // If the end tokens are correct, IngestTokens will see them and set in_reasoning_ = false.
+        }
+    }
+
+    // Soft Limit: Apply bias
+    if (in_reasoning_ && config_.reasoning_budget > 0) {
+        float usage_ratio = (float)reasoning_token_count_ / (float)config_.reasoning_budget;
+        if (usage_ratio > 0.8f && !reasoning_end_tokens_.empty()) {
+            // Ramp up bias from 0 to 10.0
+            float bias = (usage_ratio - 0.8f) * 5.0f * 10.0f; // 0.8->0, 1.0->10.0
+            
+            // Apply to the first token of the end sequence
+            // We need a way to apply bias to the sampler.
+            // Currently lfm_sampler interface doesn't expose "add bias" easily dynamically 
+            // without rebuilding or a specific sampler call.
+            // However, we can use lfm_logit_bias if we had access to the sampler chain's underlying mechanism 
+            // or if we insert a bias sampler.
+            // Since we don't have a dynamic bias sampler readily exposed in `inference_core.h`, 
+            // we will skip the soft limit implementation for now to avoid breaking changes, 
+            // or we could manually manipulate logits if we had access before sampling.
+            // `lfm_sampler_sample` handles it all.
+            // TODO: Implement soft limit logit manipulation.
+        }
+    }
+
+    lfm_token token = lfm_sampler_sample(sampler_, ctx_, -1);
         RecordSamplerToken(token, true);
         return token;
     }

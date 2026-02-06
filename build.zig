@@ -156,7 +156,7 @@ fn addTargetArtifacts(
     const lfm_core = addLiquidCore(b, effective_target, optimize, ggml, lfm_vision, spdlog_include, spdlog_level, cxx_flags_slice, framework_path, private_framework_path);
 
     if (build_tools) {
-        addExecutables(b, effective_target, optimize, ggml, llama_core, lfm_vision, lfm_core, spdlog_include, cxx_flags_slice, framework_path, private_framework_path);
+        addExecutables(b, effective_target, optimize, ggml, llama_core, lfm_vision, lfm_core, spdlog_include, cxx_flags_slice, framework_path, private_framework_path, sysroot);
         b.installArtifact(ggml);
         b.installArtifact(llama_core);
         b.installArtifact(lfm_vision);
@@ -218,7 +218,7 @@ fn addCombinedLibrary(
     const static_name = if (name_suffix.len == 0)
         b.fmt("liblfg.{s}", .{static_ext})
     else
-        b.fmt("liblfg{s}.{s}", .{name_suffix, static_ext});
+        b.fmt("liblfg{s}.{s}", .{ name_suffix, static_ext });
     const static_windows_name = if (is_windows)
         (if (name_suffix.len == 0)
             "liblfg-static.lib"
@@ -229,7 +229,7 @@ fn addCombinedLibrary(
     const shared_name = if (name_suffix.len == 0)
         b.fmt("liblfg.{s}", .{shared_ext})
     else
-        b.fmt("liblfg{s}.{s}", .{name_suffix, shared_ext});
+        b.fmt("liblfg{s}.{s}", .{ name_suffix, shared_ext });
     const implib_name = if (is_windows)
         (if (name_suffix.len == 0)
             "liblfg.lib"
@@ -465,15 +465,15 @@ fn addGgmlLibrary(
     ggml.addCSourceFiles(.{ .files = cpu_cpp, .flags = cxx_flags });
 
     if (target.result.cpu.arch == .aarch64 or target.result.cpu.arch == .arm) {
-        const arm_c = &[_][]const u8{ ggml_cpu ++ "/arch/arm/quants.c" };
-        const arm_cpp = &[_][]const u8{ ggml_cpu ++ "/arch/arm/repack.cpp" };
+        const arm_c = &[_][]const u8{ggml_cpu ++ "/arch/arm/quants.c"};
+        const arm_cpp = &[_][]const u8{ggml_cpu ++ "/arch/arm/repack.cpp"};
         ggml.addCSourceFiles(.{ .files = arm_c, .flags = c_flags });
         ggml.addCSourceFiles(.{ .files = arm_cpp, .flags = cxx_flags });
     }
 
     if (target.result.cpu.arch == .x86_64 or target.result.cpu.arch == .x86) {
-        const x86_c = &[_][]const u8{ ggml_cpu ++ "/arch/x86/quants.c" };
-        const x86_cpp = &[_][]const u8{ ggml_cpu ++ "/arch/x86/repack.cpp" };
+        const x86_c = &[_][]const u8{ggml_cpu ++ "/arch/x86/quants.c"};
+        const x86_cpp = &[_][]const u8{ggml_cpu ++ "/arch/x86/repack.cpp"};
         ggml.addCSourceFiles(.{ .files = x86_c, .flags = c_flags });
         ggml.addCSourceFiles(.{ .files = x86_cpp, .flags = cxx_flags });
     }
@@ -569,8 +569,8 @@ fn addLlamaCore(
     llama_core.addIncludePath(b.path("third_party/llama.cpp/include"));
     llama_core.addIncludePath(b.path("src/ggml"));
 
-    const src_files = collectFiles(b.allocator, "third_party/llama.cpp/src", &[_][]const u8{ ".cpp" }) catch @panic("oom");
-    const model_files = collectFiles(b.allocator, "third_party/llama.cpp/src/models", &[_][]const u8{ ".cpp" }) catch @panic("oom");
+    const src_files = collectFiles(b.allocator, "third_party/llama.cpp/src", &[_][]const u8{".cpp"}) catch @panic("oom");
+    const model_files = collectFiles(b.allocator, "third_party/llama.cpp/src/models", &[_][]const u8{".cpp"}) catch @panic("oom");
 
     llama_core.addCSourceFiles(.{ .files = src_files, .flags = cxx_flags });
     llama_core.addCSourceFiles(.{ .files = model_files, .flags = cxx_flags });
@@ -642,9 +642,9 @@ fn addLiquidCore(
     // Set spdlog compile-time log level
     core.root_module.addCMacro("SPDLOG_ACTIVE_LEVEL", b.fmt("{d}", .{spdlog_level}));
 
-    const inf = collectFiles(b.allocator, "src/inference", &[_][]const u8{ ".cpp" }) catch @panic("oom");
-    const inf_models = collectFiles(b.allocator, "src/inference/models", &[_][]const u8{ ".cpp" }) catch @panic("oom");
-    const loader = collectFiles(b.allocator, "src/loader", &[_][]const u8{ ".cpp" }) catch @panic("oom");
+    const inf = collectFiles(b.allocator, "src/inference", &[_][]const u8{".cpp"}) catch @panic("oom");
+    const inf_models = collectFiles(b.allocator, "src/inference/models", &[_][]const u8{".cpp"}) catch @panic("oom");
+    const loader = collectFiles(b.allocator, "src/loader", &[_][]const u8{".cpp"}) catch @panic("oom");
 
     core.addCSourceFiles(.{ .files = inf, .flags = cxx_flags });
     core.addCSourceFiles(.{ .files = inf_models, .flags = cxx_flags });
@@ -675,41 +675,42 @@ fn addExecutables(
     cxx_flags: []const []const u8,
     framework_path: ?[]const u8,
     private_framework_path: ?[]const u8,
+    sysroot: ?[]const u8,
 ) void {
     _ = vision;
 
-    const exe = addExe(b, target, optimize, "lfg_cli", &[_][]const u8{ "src/main.cpp" }, spdlog_include, cxx_flags, framework_path, private_framework_path);
+    const exe = addExe(b, target, optimize, "lfg_cli", &[_][]const u8{"src/main.cpp"}, spdlog_include, cxx_flags, framework_path, private_framework_path);
     exe.linkLibrary(lfm_core);
-    addCommonExeLinks(exe, target, framework_path, private_framework_path);
+    addCommonExeLinks(exe, target, framework_path, private_framework_path, sysroot);
     b.installArtifact(exe);
 
-    const eval = addExe(b, target, optimize, "lfg-eval", &[_][]const u8{ "src/eval/eval.cpp" }, spdlog_include, cxx_flags, framework_path, private_framework_path);
+    const eval = addExe(b, target, optimize, "lfg-eval", &[_][]const u8{"src/eval/eval.cpp"}, spdlog_include, cxx_flags, framework_path, private_framework_path);
     eval.addIncludePath(b.path("third_party/llama.cpp/vendor"));
     eval.addIncludePath(b.path("third_party/llama.cpp"));
     eval.addIncludePath(b.path("third_party/llama.cpp/include"));
     eval.addIncludePath(b.path("src/ggml"));
     eval.linkLibrary(lfm_core);
     eval.linkLibrary(ggml);
-    addCommonExeLinks(eval, target, framework_path, private_framework_path);
+    addCommonExeLinks(eval, target, framework_path, private_framework_path, sysroot);
     b.installArtifact(eval);
 
-    const llama_compare = addExe(b, target, optimize, "llama-compare", &[_][]const u8{ "src/eval/llama_compare.cpp" }, spdlog_include, cxx_flags, framework_path, private_framework_path);
+    const llama_compare = addExe(b, target, optimize, "llama-compare", &[_][]const u8{"src/eval/llama_compare.cpp"}, spdlog_include, cxx_flags, framework_path, private_framework_path);
     llama_compare.addIncludePath(b.path("third_party/llama.cpp/include"));
     llama_compare.addIncludePath(b.path("src/ggml"));
     llama_compare.linkLibrary(llama_core);
-    addCommonExeLinks(llama_compare, target, framework_path, private_framework_path);
+    addCommonExeLinks(llama_compare, target, framework_path, private_framework_path, sysroot);
     b.installArtifact(llama_compare);
 
-    const lfm_compare = addExe(b, target, optimize, "lfg-compare", &[_][]const u8{ "src/eval/lfg_compare.cpp" }, spdlog_include, cxx_flags, framework_path, private_framework_path);
+    const lfm_compare = addExe(b, target, optimize, "lfg-compare", &[_][]const u8{"src/eval/lfg_compare.cpp"}, spdlog_include, cxx_flags, framework_path, private_framework_path);
     lfm_compare.linkLibrary(lfm_core);
     lfm_compare.linkLibrary(ggml);
-    addCommonExeLinks(lfm_compare, target, framework_path, private_framework_path);
+    addCommonExeLinks(lfm_compare, target, framework_path, private_framework_path, sysroot);
     b.installArtifact(lfm_compare);
 
-    const lfm_struct = addExe(b, target, optimize, "lfg-structured-compare", &[_][]const u8{ "src/eval/lfg_structured_compare.cpp" }, spdlog_include, cxx_flags, framework_path, private_framework_path);
+    const lfm_struct = addExe(b, target, optimize, "lfg-structured-compare", &[_][]const u8{"src/eval/lfg_structured_compare.cpp"}, spdlog_include, cxx_flags, framework_path, private_framework_path);
     lfm_struct.linkLibrary(lfm_core);
     lfm_struct.linkLibrary(ggml);
-    addCommonExeLinks(lfm_struct, target, framework_path, private_framework_path);
+    addCommonExeLinks(lfm_struct, target, framework_path, private_framework_path, sysroot);
     b.installArtifact(lfm_struct);
 
     const llama_struct = addExe(b, target, optimize, "llama-structured-compare", &[_][]const u8{
@@ -720,11 +721,11 @@ fn addExecutables(
     llama_struct.addIncludePath(b.path("src/ggml"));
     llama_struct.addIncludePath(spdlog_include);
     llama_struct.linkLibrary(llama_core);
-    addCommonExeLinks(llama_struct, target, framework_path, private_framework_path);
+    addCommonExeLinks(llama_struct, target, framework_path, private_framework_path, sysroot);
     b.installArtifact(llama_struct);
 
-    addBenchmarks(b, target, optimize, ggml, lfm_core, spdlog_include, cxx_flags, framework_path, private_framework_path);
-    addTests(b, target, optimize, ggml, lfm_core, spdlog_include, cxx_flags, framework_path, private_framework_path);
+    addBenchmarks(b, target, optimize, ggml, lfm_core, spdlog_include, cxx_flags, framework_path, private_framework_path, sysroot);
+    addTests(b, target, optimize, ggml, lfm_core, spdlog_include, cxx_flags, framework_path, private_framework_path, sysroot);
 }
 
 fn addBenchmarks(
@@ -737,6 +738,7 @@ fn addBenchmarks(
     cxx_flags: []const []const u8,
     framework_path: ?[]const u8,
     private_framework_path: ?[]const u8,
+    sysroot: ?[]const u8,
 ) void {
     const bench_names = [_][]const u8{
         "benchmark_json_schema",
@@ -753,10 +755,10 @@ fn addBenchmarks(
     var bench_step = b.step("bench", "Build benchmarks");
 
     for (bench_names, 0..) |name, i| {
-        const exe = addExe(b, target, optimize, name, &[_][]const u8{ bench_files[i] }, spdlog_include, cxx_flags, framework_path, private_framework_path);
+        const exe = addExe(b, target, optimize, name, &[_][]const u8{bench_files[i]}, spdlog_include, cxx_flags, framework_path, private_framework_path);
         exe.linkLibrary(lfm_core);
         exe.linkLibrary(ggml);
-        addCommonExeLinks(exe, target, framework_path, private_framework_path);
+        addCommonExeLinks(exe, target, framework_path, private_framework_path, sysroot);
         b.installArtifact(exe);
         bench_step.dependOn(&exe.step);
     }
@@ -772,6 +774,7 @@ fn addTests(
     cxx_flags: []const []const u8,
     framework_path: ?[]const u8,
     private_framework_path: ?[]const u8,
+    sysroot: ?[]const u8,
 ) void {
     const tests = [_][]const u8{
         "test_loader",
@@ -790,6 +793,7 @@ fn addTests(
         "test_structured_double_accept",
         "test_reasoning_healing_integration",
         "test_complex_reasoning_healing",
+        "test_reasoning_budget",
         "test_model_capabilities",
     };
 
@@ -810,23 +814,24 @@ fn addTests(
         "src/tests/test_structured_double_accept.cpp",
         "src/tests/test_reasoning_healing_integration.cpp",
         "src/tests/test_complex_reasoning_healing.cpp",
+        "src/tests/test_reasoning_budget.cpp",
         "src/tests/test_model_capabilities.cpp",
     };
 
     var test_step = b.step("test", "Build and run tests");
 
     for (tests, 0..) |name, i| {
-        const exe = addExe(b, target, optimize, name, &[_][]const u8{ test_files[i] }, spdlog_include, cxx_flags, framework_path, private_framework_path);
+        const exe = addExe(b, target, optimize, name, &[_][]const u8{test_files[i]}, spdlog_include, cxx_flags, framework_path, private_framework_path);
         exe.addIncludePath(b.path("src/tests"));
         exe.addIncludePath(b.path("src"));
         exe.addIncludePath(b.path("src/inference"));
         exe.addIncludePath(b.path("src/loader"));
         exe.addIncludePath(spdlog_include);
         exe.linkLibrary(lfm_core);
-        if (std.mem.eql(u8, name, "test_reasoning_healing_integration") or std.mem.eql(u8, name, "test_complex_reasoning_healing")) {
+        if (std.mem.eql(u8, name, "test_reasoning_healing_integration") or std.mem.eql(u8, name, "test_complex_reasoning_healing") or std.mem.eql(u8, name, "test_reasoning_budget")) {
             exe.linkLibrary(ggml);
         }
-        addCommonExeLinks(exe, target, framework_path, private_framework_path);
+        addCommonExeLinks(exe, target, framework_path, private_framework_path, sysroot);
         b.installArtifact(exe);
 
         const run = b.addRunArtifact(exe);
@@ -884,6 +889,7 @@ fn addCommonExeLinks(
     target: std.Build.ResolvedTarget,
     framework_path: ?[]const u8,
     private_framework_path: ?[]const u8,
+    sysroot: ?[]const u8,
 ) void {
     if (target.result.os.tag == .linux) {
         exe.linkSystemLibrary("dl");
@@ -897,6 +903,10 @@ fn addCommonExeLinks(
         }
         if (private_framework_path) |path| {
             exe.root_module.addFrameworkPath(.{ .cwd_relative = path });
+        }
+        if (sysroot) |path| {
+            const usr_lib = exe.step.owner.fmt("{s}/usr/lib", .{path});
+            exe.addLibraryPath(.{ .cwd_relative = usr_lib });
         }
         exe.linkFramework("Foundation");
         exe.linkFramework("Metal");
@@ -1003,8 +1013,8 @@ fn makeFlags(
     var c_flags = std.ArrayList([]const u8).empty;
     var cxx_flags = std.ArrayList([]const u8).empty;
 
-    c_flags.appendSlice(b.allocator, &[_][]const u8{ "-std=c11" }) catch @panic("oom");
-    cxx_flags.appendSlice(b.allocator, &[_][]const u8{ "-std=c++17" }) catch @panic("oom");
+    c_flags.appendSlice(b.allocator, &[_][]const u8{"-std=c11"}) catch @panic("oom");
+    cxx_flags.appendSlice(b.allocator, &[_][]const u8{"-std=c++17"}) catch @panic("oom");
 
     if (optimize != .Debug) {
         c_flags.appendSlice(b.allocator, &[_][]const u8{ "-O3", "-DNDEBUG" }) catch @panic("oom");
@@ -1083,7 +1093,7 @@ fn addIsaCombinedLibraries(
         .{ .name = "amx", .cpu_model = &std.Target.x86.cpu.sapphirerapids },
     };
 
-    const arm_dotprod_features = std.Target.aarch64.featureSet(&[_]std.Target.aarch64.Feature{ .dotprod });
+    const arm_dotprod_features = std.Target.aarch64.featureSet(&[_]std.Target.aarch64.Feature{.dotprod});
     const arm_i8mm_features = std.Target.aarch64.featureSet(&[_]std.Target.aarch64.Feature{ .i8mm, .dotprod });
 
     const arm_variants_macos = [_]IsaVariant{

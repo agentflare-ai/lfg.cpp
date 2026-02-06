@@ -34,6 +34,7 @@ public:
         int n_batch = 512;
         bool enable_healing = false; // Enable checkpointing for token healing
         bool structured_checkpointing = true; // Snapshot sampler state for structured decoding
+        int reasoning_budget = 0; // 0 = disabled. Number of tokens allowed for reasoning.
         SamplingConfig sampling;
     };
 
@@ -51,6 +52,7 @@ public:
         std::string grammar_str;
         std::string grammar_root;
         std::shared_ptr<lfm_sampler> sampler_state;
+        size_t reasoning_token_count = 0;
     };
 
     InferenceCore(lfm_model* model, const Config& config);
@@ -110,6 +112,10 @@ private:
     std::vector<lfm_token> reasoning_start_tokens_;
     std::vector<lfm_token> reasoning_end_tokens_;
     bool in_reasoning_ = false;
+    
+    // Reasoning Budget State
+    size_t reasoning_token_count_ = 0;
+    int forcing_reasoning_end_index_ = -1; // -1 if not forcing, >= 0 is index into reasoning_end_tokens_
 
     // Sampling state
     struct lfm_sampler* sampler_ = nullptr;
@@ -127,6 +133,10 @@ private:
     std::vector<uint8_t> healing_state_buffer_;
     int healing_n_past_ = -1;
     std::shared_ptr<lfm_sampler> healing_sampler_snapshot_;
+
+    // Scratch buffers to avoid heap allocations in hot paths
+    std::vector<lfm_pos> pos_buf_;
+    std::vector<int8_t> logits_buf_;
 
     bool IngestInternal(const std::vector<lfm_token>& tokens, bool update_sampler);
     void RebuildSampler();
