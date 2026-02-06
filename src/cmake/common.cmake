@@ -1,7 +1,7 @@
 include("${CMAKE_CURRENT_LIST_DIR}/ggml-common.cmake")
 
-function(lfm_add_compile_flags)
-    if (LFM_FATAL_WARNINGS)
+function(lfg_add_compile_flags)
+    if (LFG_FATAL_WARNINGS)
         if (CMAKE_CXX_COMPILER_ID MATCHES "GNU" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
             list(APPEND C_FLAGS   -Werror)
             list(APPEND CXX_FLAGS -Werror)
@@ -10,7 +10,7 @@ function(lfm_add_compile_flags)
         endif()
     endif()
 
-    if (LFM_ALL_WARNINGS)
+    if (LFG_ALL_WARNINGS)
         if (NOT MSVC)
             list(APPEND C_FLAGS -Wshadow -Wstrict-prototypes -Wpointer-arith -Wmissing-prototypes
                                 -Werror=implicit-int -Werror=implicit-function-declaration)

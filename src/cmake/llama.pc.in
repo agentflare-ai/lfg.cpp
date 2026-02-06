@@ -5,6 +5,6 @@ includedir=@CMAKE_INSTALL_FULL_INCLUDEDIR@
 
 Name: liquid
 Description: Port of Facebook's Liquid model in C/C++
-Version: @LFM_INSTALL_VERSION@
+Version: @LFG_INSTALL_VERSION@
 Libs: -L${libdir} -lggml -lggml-base -lliquid
 Cflags: -I${includedir}

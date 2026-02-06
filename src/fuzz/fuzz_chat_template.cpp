@@ -1,4 +1,4 @@
-#include "lfm_inference.h"
+#include "lfg_inference.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -31,7 +31,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
 
     std::vector<std::string> roles;
     std::vector<std::string> contents;
-    std::vector<lfm_chat_message> msgs;
+    std::vector<lfg_chat_message> msgs;
     roles.reserve(n_msg);
     contents.reserve(n_msg);
     msgs.reserve(n_msg);
@@ -73,7 +73,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
         out_ptr = out_buf.data();
     }
 
-    (void) lfm_chat_apply_template(
+    (void) lfg_chat_apply_template(
         tmpl.c_str(),
         msgs.empty() ? nullptr : msgs.data(),
         msgs.size(),

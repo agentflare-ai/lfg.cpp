@@ -1,12 +1,12 @@
-#include "lfm_lfm2.h"
+#include "lfg_lfm2.h"
 
 #include <cmath>
 
-#include "../lfm_memory_hybrid_iswa.h"
-#include "../lfm_memory_hybrid.h"
+#include "../lfg_memory_hybrid_iswa.h"
+#include "../lfg_memory_hybrid.h"
 
 template <bool iswa>
-lfm_build_lfm2<iswa>::lfm_build_lfm2(const lfm_model & model, const llm_graph_params & params) :
+lfg_build_lfm2<iswa>::lfg_build_lfm2(const lfg_model & model, const llm_graph_params & params) :
     llm_graph_context(params),
     model(model) {
     using inp_hybrid_type = std::conditional_t<iswa, llm_graph_input_mem_hybrid_iswa, llm_graph_input_mem_hybrid>;
@@ -70,14 +70,14 @@ lfm_build_lfm2<iswa>::lfm_build_lfm2(const lfm_model & model, const llm_graph_pa
     ggml_build_forward_expand(gf, cur);
 }
 
-template <bool iswa> ggml_tensor * lfm_build_lfm2<iswa>::build_moe_feed_forward(ggml_tensor * cur, int il) const {
+template <bool iswa> ggml_tensor * lfg_build_lfm2<iswa>::build_moe_feed_forward(ggml_tensor * cur, int il) const {
     return build_moe_ffn(cur, model.layers[il].ffn_gate_inp, model.layers[il].ffn_up_exps,
                          model.layers[il].ffn_gate_exps, model.layers[il].ffn_down_exps,
                          model.layers[il].ffn_exp_probs_b, n_expert, n_expert_used, LLM_FFN_SILU, true, false, 0.0,
-                         static_cast<lfm_expert_gating_func_type>(hparams.expert_gating_func), il);
+                         static_cast<lfg_expert_gating_func_type>(hparams.expert_gating_func), il);
 }
 
-template <bool iswa> ggml_tensor * lfm_build_lfm2<iswa>::build_dense_feed_forward(ggml_tensor * cur, int il) const {
+template <bool iswa> ggml_tensor * lfg_build_lfm2<iswa>::build_dense_feed_forward(ggml_tensor * cur, int il) const {
     GGML_ASSERT(!model.layers[il].ffn_up_b);
     GGML_ASSERT(!model.layers[il].ffn_gate_b);
     GGML_ASSERT(!model.layers[il].ffn_down_b);
@@ -86,7 +86,7 @@ template <bool iswa> ggml_tensor * lfm_build_lfm2<iswa>::build_dense_feed_forwar
 }
 
 template <bool iswa>
-ggml_tensor * lfm_build_lfm2<iswa>::build_attn_block(
+ggml_tensor * lfg_build_lfm2<iswa>::build_attn_block(
     ggml_tensor *                                                                     cur,
     ggml_tensor *                                                                     inp_pos,
     std::conditional_t<iswa, llm_graph_input_attn_kv_iswa, llm_graph_input_attn_kv> * inp_attn,
@@ -127,12 +127,12 @@ ggml_tensor * lfm_build_lfm2<iswa>::build_attn_block(
 }
 
 template <bool iswa>
-ggml_tensor * lfm_build_lfm2<iswa>::build_shortconv_block(ggml_tensor * cur, llm_graph_input_rs * inp_recr, int il) {
-    const lfm_memory_recurrent_context * mctx_cur;
+ggml_tensor * lfg_build_lfm2<iswa>::build_shortconv_block(ggml_tensor * cur, llm_graph_input_rs * inp_recr, int il) {
+    const lfg_memory_recurrent_context * mctx_cur;
     if constexpr (iswa) {
-        mctx_cur = static_cast<const lfm_memory_hybrid_iswa_context *>(mctx)->get_recr();
+        mctx_cur = static_cast<const lfg_memory_hybrid_iswa_context *>(mctx)->get_recr();
     } else {
-        mctx_cur = static_cast<const lfm_memory_hybrid_context *>(mctx)->get_recr();
+        mctx_cur = static_cast<const lfg_memory_hybrid_context *>(mctx)->get_recr();
     }
     const uint32_t kv_head      = mctx_cur->get_head();
     const int64_t  n_seq_tokens = ubatch.n_seq_tokens;
@@ -194,5 +194,5 @@ ggml_tensor * lfm_build_lfm2<iswa>::build_shortconv_block(ggml_tensor * cur, llm
 }
 
 // Explicit template instantiations
-template struct lfm_build_lfm2<true>;
-template struct lfm_build_lfm2<false>;
+template struct lfg_build_lfm2<true>;
+template struct lfg_build_lfm2<false>;

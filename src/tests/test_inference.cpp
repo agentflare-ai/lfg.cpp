@@ -1,32 +1,31 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest.h"
-#include "../inference/inference_core.h"
-
-using namespace liquid;
+#include "../inference/lfg_api.h"
 
 TEST_CASE("InferenceCore Lifecycle") {
     // Test complete failure case (no model)
-    InferenceCore::Config config;
-    InferenceCore core(nullptr, config); // Should handle nullptr model
+    lfg_session_config config = lfg_session_default_config();
+    lfg_session *session = lfg_session_create(nullptr, &config); // Should handle nullptr model
 
     SUBCASE("State checks on empty core") {
         // Sample should return 0/default when no context
-        CHECK(core.Sample() == 0);
-        
+        CHECK(lfg_session_sample(session) == 0);
+
         // Logits should be empty
-        CHECK(core.GetLogits().empty());
-        
+        CHECK(lfg_session_get_logits(session, nullptr, 0) <= 0);
+
         // Decoding should be safe (no-op or fail gracefully)
         // Implementation returned true as placeholder, which is fine
-        CHECK(core.Decode() == true); 
+        CHECK(lfg_session_decode(session) == true);
     }
+
+    lfg_session_free(session);
 }
 
-#include "../loader/model_loader.h"
 #include <fstream>
 
 TEST_CASE("InferenceCore Integration with Real Model") {
-    lfm_backend_init();
+    lfg_backend_init();
 
     // Check if model exists
     std::string model_path =  "models/LFM2.5-1.2B-Thinking-GGUF/LFM2.5-1.2B-Thinking-Q4_K_M.gguf";
@@ -35,39 +34,39 @@ TEST_CASE("InferenceCore Integration with Real Model") {
         MESSAGE("Skipping integration test: Model not found at " << model_path);
         return;
     }
-    
+
     // Load Model
-    ModelLoader::ModelConfig load_config;
-    load_config.model_path = model_path;
-    lfm_model* model = ModelLoader::LoadModel(load_config);
+    lfg_model_load_config load_config = lfg_model_load_default_config();
+    load_config.model_path = model_path.c_str();
+    lfg_model* model = lfg_load_model(&load_config);
     REQUIRE(model != nullptr);
-    
+
     // Init Core
-    InferenceCore::Config config;
+    lfg_session_config config = lfg_session_default_config();
     config.n_ctx = 512;
-    InferenceCore core(model, config);
-    
+    lfg_session *session = lfg_session_create(model, &config);
+
     SUBCASE("Forward Pass") {
         // Tokenize prompt "Hello" -> simplistic manual token for now or 1 (BOS)
         // liquid usually uses 1 as BOS
-        std::vector<lfm_token> tokens = {1, 15043}; // BOS, "Hello" (approx)
-        
-        CHECK(core.IngestTokens(tokens));
-        
+        lfg_token tokens[] = {1, 15043}; // BOS, "Hello" (approx)
+
+        CHECK(lfg_session_ingest_tokens(session, tokens, 2, true));
+
         // Output should be generated
-        CHECK(core.Decode());
-        
+        CHECK(lfg_session_decode(session));
+
         // Sampling
-        lfm_token next = core.Sample();
+        lfg_token next = lfg_session_sample(session);
         MESSAGE("Sampled token: " << next);
         CHECK(next >= 0);
-        
+
         // Logits
-        auto logits = core.GetLogits();
-        CHECK(logits.size() > 0);
+        CHECK(lfg_session_get_logits(session, nullptr, 0) > 0);
     }
-    
-    lfm_model_free(model);
+
+    lfg_session_free(session);
+    lfg_model_free(model);
 }
 
 TEST_CASE("InferenceCore Structured Decoding") {
@@ -77,24 +76,26 @@ TEST_CASE("InferenceCore Structured Decoding") {
     std::ifstream f(model_path);
     if (!f.good()) return;
 
-    ModelLoader::ModelConfig load_config;
-    load_config.model_path = model_path;
-    lfm_model* model = ModelLoader::LoadModel(load_config);
-    
-    InferenceCore::Config config;
-    InferenceCore core(model, config);
+    lfg_model_load_config load_config = lfg_model_load_default_config();
+    load_config.model_path = model_path.c_str();
+    lfg_model* model = lfg_load_model(&load_config);
+
+    lfg_session_config config = lfg_session_default_config();
+    lfg_session *session = lfg_session_create(model, &config);
 
     SUBCASE("GBNF Grammar") {
         // Simple GBNF grammar: root ::= "yes" | "no"
         std::string grammar = "root ::= \"yes\" | \"no\"";
-        core.ConfigureStructuredDecoding(grammar);
-        
-        core.IngestTokens({1, 15043}); // "Hello"
-        core.Decode();
-        
-        lfm_token token = core.Sample();
+        lfg_session_configure_structured(session, grammar.c_str(), "root");
+
+        lfg_token toks[] = {1, 15043}; // "Hello"
+        lfg_session_ingest_tokens(session, toks, 2, false);
+
+        lfg_token token = lfg_session_sample(session);
         MESSAGE("Strict Grammar Sampled: " << token);
         CHECK(token > 0);
     }
-    lfm_model_free(model);
+
+    lfg_session_free(session);
+    lfg_model_free(model);
 }

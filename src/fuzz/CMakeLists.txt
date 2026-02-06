@@ -16,7 +16,7 @@ endif()
 
 function(lfg_add_fuzzer name source)
     add_executable(${name} ${source})
-    target_link_libraries(${name} PRIVATE lfm_core)
+    target_link_libraries(${name} PRIVATE lfg_core)
     target_include_directories(${name} PRIVATE ../inference)
     target_compile_options(${name} PRIVATE -O1 -g -fno-omit-frame-pointer ${LFG_FUZZER_FLAGS})
     target_link_options(${name} PRIVATE ${LFG_FUZZER_FLAGS} ${LFG_FUZZER_LINKER})

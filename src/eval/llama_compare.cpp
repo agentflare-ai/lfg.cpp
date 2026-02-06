@@ -1,5 +1,5 @@
 // Standalone llama.cpp text generation for comparison
-// This links ONLY against llama.cpp, not lfm_core, to avoid symbol conflicts
+// This links ONLY against llama.cpp, not lfg_core, to avoid symbol conflicts
 
 #include "llama.h"
 #include "ggml.h"

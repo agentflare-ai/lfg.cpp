@@ -1,36 +1,35 @@
 add_library(liquid
-    lfm_adapter.cpp
-    lfm_arch.cpp
-    lfm_batch.cpp
-    lfm_chat.cpp
-    lfm_context.cpp
-    lfm_cparams.cpp
-    lfm_grammar.cpp
+    lfg_adapter.cpp
+    lfg_arch.cpp
+    lfg_batch.cpp
+    lfg_chat.cpp
+    lfg_context.cpp
+    lfg_cparams.cpp
+    lfg_grammar.cpp
     json_schema_to_grammar.cpp
-    lfm_graph.cpp
-    lfm_hparams.cpp
-    lfm_impl.cpp
-    lfm_inference.cpp
-    lfm_io.cpp
-    lfm_kv_cache.cpp
-    lfm_kv_cache_iswa.cpp
-    lfm_memory.cpp
-    lfm_memory_hybrid.cpp
-    lfm_memory_hybrid_iswa.cpp
-    lfm_memory_recurrent.cpp
-    lfm_mmap.cpp
-    lfm_model.cpp
-    lfm_model_loader.cpp
-    lfm_model_saver.cpp
-    lfm_quant.cpp
-    lfm_sampling.cpp
-    lfm_sampler_prefix.cpp
-    lfm_vocab.cpp
+    lfg_graph.cpp
+    lfg_hparams.cpp
+    lfg_impl.cpp
+    lfg_inference.cpp
+    lfg_io.cpp
+    lfg_kv_cache.cpp
+    lfg_kv_cache_iswa.cpp
+    lfg_memory.cpp
+    lfg_memory_hybrid.cpp
+    lfg_memory_hybrid_iswa.cpp
+    lfg_memory_recurrent.cpp
+    lfg_mmap.cpp
+    lfg_model.cpp
+    lfg_model_loader.cpp
+    lfg_model_saver.cpp
+    lfg_quant.cpp
+    lfg_sampling.cpp
+    lfg_sampler_prefix.cpp
+    lfg_vocab.cpp
     unicode-data.cpp
     unicode.cpp
     models/lfm2.cpp
-    inference_core.cpp
-    structured_decoding_engine.cpp
+    lfg_api.cpp
 )
 
 
@@ -41,12 +40,12 @@ target_include_directories(liquid PUBLIC
     ../../third_party/llama.cpp/vendor
 )
 
-target_link_libraries(liquid PUBLIC lfm_ggml)
+target_link_libraries(liquid PUBLIC lfg_ggml)
 
 if (BUILD_SHARED_LIBS)
     set_target_properties(liquid PROPERTIES POSITION_INDEPENDENT_CODE ON)
-    target_compile_definitions(liquid PRIVATE LFM_BUILD)
-    target_compile_definitions(liquid PUBLIC  LFM_SHARED)
+    target_compile_definitions(liquid PRIVATE LFG_BUILD)
+    target_compile_definitions(liquid PUBLIC  LFG_SHARED)
 endif()
 
 # Strict warnings

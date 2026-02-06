@@ -1,9 +1,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest.h"
 
-#include "../inference/inference_core.h"
-#include "../inference/lfm_model.h"
-#include "../loader/model_loader.h"
+#include "../inference/lfg_api.h"
+#include "../inference/lfg_model.h"
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -15,14 +14,13 @@
 #include <string>
 #include <vector>
 
-using namespace liquid;
 using json = nlohmann::json;
 
 namespace {
 
 struct GenerationResult {
     std::string text;
-    std::vector<lfm_token> tokens;
+    std::vector<lfg_token> tokens;
 };
 
 const std::string kToolSchema = R"({
@@ -172,28 +170,28 @@ const std::string kToolPrompt =
     "Include tool calls for get_weather, calculator, search_docs, and generate_report. "
     "Use a run_id like AB-1234 and include one success case and one failure case in the report.";
 
-GenerationResult GenerateStructured(InferenceCore & core,
-                                    lfm_model * model,
+GenerationResult GenerateStructured(lfg_session * session,
+                                    lfg_model * model,
                                     const std::string & schema,
                                     const std::string & prompt,
                                     int max_tokens) {
-    core.Reset();
-    core.ConfigureStructuredDecoding(schema);
+    lfg_session_reset(session);
+    lfg_session_configure_structured(session, schema.c_str(), "root");
 
     auto prompt_tokens = model->vocab.tokenize(prompt, true);
-    core.IngestTokens(prompt_tokens, false);
+    lfg_session_ingest_tokens(session, prompt_tokens.data(), prompt_tokens.size(), false);
 
     GenerationResult result;
     result.tokens.reserve(max_tokens);
 
     for (int i = 0; i < max_tokens; ++i) {
-        lfm_token token = core.Sample();
+        lfg_token token = lfg_session_sample(session);
         if (token == model->vocab.token_eos()) {
             break;
         }
         result.tokens.push_back(token);
         result.text += model->vocab.token_to_piece(token);
-        core.IngestTokens({token}, false);
+        lfg_session_ingest_tokens(session, &token, 1, false);
 
         if (i > 16) {
             const auto start = result.text.find('{');
@@ -212,20 +210,20 @@ GenerationResult GenerateStructured(InferenceCore & core,
     return result;
 }
 
-GenerationResult GenerateContinuation(InferenceCore & core,
-                                      lfm_model * model,
+GenerationResult GenerateContinuation(lfg_session * session,
+                                      lfg_model * model,
                                       int max_tokens) {
     GenerationResult result;
     result.tokens.reserve(max_tokens);
 
     for (int i = 0; i < max_tokens; ++i) {
-        lfm_token token = core.Sample();
+        lfg_token token = lfg_session_sample(session);
         if (token == model->vocab.token_eos()) {
             break;
         }
         result.tokens.push_back(token);
         result.text += model->vocab.token_to_piece(token);
-        core.IngestTokens({token}, false);
+        lfg_session_ingest_tokens(session, &token, 1, false);
     }
 
     return result;
@@ -275,7 +273,7 @@ void ValidateToolReport(const json & tool_call) {
 } // namespace
 
 TEST_CASE("LFM2-350M Exhaustive Tool Calling + Structured Decoding") {
-    lfm_backend_init();
+    lfg_backend_init();
 
     const std::string model_path = "models/lfm2-350M.gguf";
     std::ifstream f(model_path);
@@ -284,23 +282,23 @@ TEST_CASE("LFM2-350M Exhaustive Tool Calling + Structured Decoding") {
         return;
     }
 
-    ModelLoader::ModelConfig load_config;
-    load_config.model_path = model_path;
+    lfg_model_load_config load_config = lfg_model_load_default_config();
+    load_config.model_path = model_path.c_str();
     load_config.n_gpu_layers = 0;
 
-    lfm_model * model = ModelLoader::LoadModel(load_config);
+    lfg_model * model = lfg_load_model(&load_config);
     REQUIRE(model != nullptr);
 
-    InferenceCore::Config config;
+    lfg_session_config config = lfg_session_default_config();
     config.n_ctx = 2048;
     config.sampling.temp = 0.0f;
     config.sampling.top_k = 40;
     config.sampling.top_p = 1.0f;
 
-    InferenceCore core(model, config);
+    lfg_session * session = lfg_session_create(model, &config);
 
     SUBCASE("Multi-tool structured decoding with report") {
-        auto result = GenerateStructured(core, model, kToolSchema, kToolPrompt, 512);
+        auto result = GenerateStructured(session, model, kToolSchema, kToolPrompt, 512);
         MESSAGE("Generated JSON: " << result.text);
 
         json parsed = ParseJsonOrFail(result.text);
@@ -325,57 +323,62 @@ TEST_CASE("LFM2-350M Exhaustive Tool Calling + Structured Decoding") {
     }
 
     SUBCASE("Checkpointing determinism under complex schema") {
-        core.Reset();
-        core.ConfigureStructuredDecoding("");
+        lfg_session_reset(session);
+        lfg_session_configure_structured(session, "", "root");
 
         auto prompt_tokens = model->vocab.tokenize(kToolPrompt, true);
-        core.IngestTokens(prompt_tokens, false);
+        lfg_session_ingest_tokens(session, prompt_tokens.data(), prompt_tokens.size(), false);
 
-        auto prefix = GenerateContinuation(core, model, 80);
-        auto checkpoint = core.CreateCheckpoint();
+        auto prefix = GenerateContinuation(session, model, 80);
+        lfg_checkpoint * checkpoint = lfg_session_create_checkpoint(session);
 
-        auto suffix_a = GenerateContinuation(core, model, 120);
-        bool restored = core.RestoreCheckpoint(checkpoint);
+        auto suffix_a = GenerateContinuation(session, model, 120);
+        bool restored = lfg_session_restore_checkpoint(session, checkpoint);
         CHECK(restored);
 
-        auto suffix_b = GenerateContinuation(core, model, 120);
+        auto suffix_b = GenerateContinuation(session, model, 120);
 
         CHECK(suffix_a.tokens == suffix_b.tokens);
         CHECK(suffix_a.text == suffix_b.text);
+
+        lfg_checkpoint_free(checkpoint);
     }
 
     SUBCASE("Token healing with JSON schema + report") {
-        InferenceCore::Config heal_config = config;
+        lfg_session_config heal_config = config;
         heal_config.enable_healing = true;
-        InferenceCore healing_core(model, heal_config);
+        lfg_session * healing_session = lfg_session_create(model, &heal_config);
 
         // Use a valid JSON prefix so healing can replay grammar state safely.
         const std::string prompt_prefix = "{\"schema_version\": \"1.0\", \"tool_calls\": [";
         const std::string partial_token = "{";
-        healing_core.ConfigureStructuredDecoding(kToolSchema);
+        lfg_session_configure_structured(healing_session, kToolSchema.c_str(), "root");
 
         auto prefix_tokens = model->vocab.tokenize(prompt_prefix, false);
         if (!prefix_tokens.empty() && prefix_tokens[0] == model->vocab.token_bos()) {
             prefix_tokens.erase(prefix_tokens.begin());
         }
-        healing_core.IngestTokens(prefix_tokens, false);
+        lfg_session_ingest_tokens(healing_session, prefix_tokens.data(), prefix_tokens.size(), false);
 
         auto partial_tokens = model->vocab.tokenize(partial_token, false);
         if (!partial_tokens.empty() && partial_tokens[0] == model->vocab.token_bos()) {
             partial_tokens.erase(partial_tokens.begin());
         }
-        healing_core.IngestTokens(partial_tokens, false);
+        lfg_session_ingest_tokens(healing_session, partial_tokens.data(), partial_tokens.size(), false);
 
-        bool healed = healing_core.HealLastToken();
+        bool healed = lfg_session_heal_last_token(healing_session);
         MESSAGE("Token healing triggered: " << (healed ? "true" : "false"));
 
-        auto result = GenerateContinuation(healing_core, model, 512);
+        auto result = GenerateContinuation(healing_session, model, 512);
         MESSAGE("Generated JSON after healing: " << result.text);
 
         CHECK(result.text.find("\"function\"") != std::string::npos);
         CHECK(result.text.find("\"search_docs\"") != std::string::npos);
         CHECK(result.text.find("\"since\"") != std::string::npos);
+
+        lfg_session_free(healing_session);
     }
 
-    lfm_model_free(model);
+    lfg_session_free(session);
+    lfg_model_free(model);
 }

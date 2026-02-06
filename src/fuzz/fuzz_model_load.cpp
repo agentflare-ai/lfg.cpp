@@ -1,4 +1,4 @@
-#include "lfm_inference.h"
+#include "lfg_inference.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -28,7 +28,7 @@ struct TempFile {
             }
         }
 #else
-        char tmpl[] = "/tmp/lfm_fuzz_XXXXXX";
+        char tmpl[] = "/tmp/lfg_fuzz_XXXXXX";
         int fd = mkstemp(tmpl);
         if (fd >= 0) {
             file = fdopen(fd, "wb");
@@ -60,7 +60,7 @@ struct TempFile {
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
     static std::once_flag init_once;
     std::call_once(init_once, []() {
-        lfm_backend_init();
+        lfg_backend_init();
     });
 
     if (!data || size == 0) {
@@ -79,13 +79,13 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
         return 0;
     }
 
-    lfm_model_params params = lfm_model_default_params();
+    lfg_model_params params = lfg_model_default_params();
     params.vocab_only = true;
 
     try {
-        lfm_model * model = lfm_model_load_from_file(temp.path.c_str(), params);
+        lfg_model * model = lfg_model_load_from_file(temp.path.c_str(), params);
         if (model) {
-            lfm_model_free(model);
+            lfg_model_free(model);
         }
     } catch (...) {
         // swallow exceptions to keep fuzzing; C API should not throw

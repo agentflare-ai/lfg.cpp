@@ -107,7 +107,7 @@ endif()
 # add_subdirectory(third_party/llama.cpp)
 add_subdirectory(src/ggml)
 
-# Build llama.cpp core against the same ggml we use for lfm_core.
+# Build llama.cpp core against the same ggml we use for lfg_core.
 file(GLOB LLAMA_CORE_SOURCES
     "third_party/llama.cpp/src/*.cpp"
     "third_party/llama.cpp/src/models/*.cpp"
@@ -118,7 +118,7 @@ target_include_directories(llama_core_local PRIVATE
     third_party/llama.cpp/include
     third_party/llama.cpp/ggml/include
 )
-target_link_libraries(llama_core_local PUBLIC lfm_ggml)
+target_link_libraries(llama_core_local PUBLIC lfg_ggml)
 
 # Inference Core (LFM) Source
 file(GLOB INFERENCE_SOURCES 
@@ -147,37 +147,37 @@ include_directories(SYSTEM "third_party/llama.cpp/vendor")
 include_directories(SYSTEM "third_party/llama.cpp")
 
 # Vision Library (Refactored)
-add_library(lfm_vision STATIC
+add_library(lfg_vision STATIC
     src/vision/clip.cpp
     src/vision/siglip.cpp
 )
 # Relax warnings for MTMD/Vision due to legacy code
 if(CMAKE_COMPILER_IS_GNUCC OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    target_compile_options(lfm_vision PRIVATE -w) 
+    target_compile_options(lfg_vision PRIVATE -w) 
 endif()
-target_link_libraries(lfm_vision PUBLIC lfm_ggml spdlog::spdlog_header_only)
+target_link_libraries(lfg_vision PUBLIC lfg_ggml spdlog::spdlog_header_only)
 
 # Library
-add_library(lfm_core STATIC
+add_library(lfg_core STATIC
     ${INFERENCE_SOURCES}
     ${LOADER_SOURCES}
 )
 
 # Apply strict warnings only to our code
 if(CMAKE_COMPILER_IS_GNUCC OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    target_compile_options(lfm_core PRIVATE ${LFG_STRICT_WARNINGS})
+    target_compile_options(lfg_core PRIVATE ${LFG_STRICT_WARNINGS})
 endif()
 
 # Link against ggml from llama.cpp
-# Also link lfm_mtmd
-target_link_libraries(lfm_core PUBLIC lfm_ggml lfm_vision spdlog::spdlog_header_only pthread dl)
+# Also link lfg_mtmd
+target_link_libraries(lfg_core PUBLIC lfg_ggml lfg_vision spdlog::spdlog_header_only pthread dl)
 
 # Main Executable (Placeholder for now, or CLI later)
 add_executable(lfg_cli src/main.cpp)
 if(CMAKE_COMPILER_IS_GNUCC OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     target_compile_options(lfg_cli PRIVATE ${LFG_STRICT_WARNINGS})
 endif()
-target_link_libraries(lfg_cli PRIVATE lfm_core spdlog::spdlog_header_only)
+target_link_libraries(lfg_cli PRIVATE lfg_core spdlog::spdlog_header_only)
 
 
 add_subdirectory(src/eval)

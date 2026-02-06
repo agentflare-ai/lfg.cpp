@@ -1,0 +1,122 @@
+#pragma once
+
+#include "lfg_inference.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// Opaque handles for the session-centric API.
+typedef struct lfg_session lfg_session;
+typedef struct lfg_checkpoint lfg_checkpoint;
+
+// Sampling parameters for a session.
+typedef struct lfg_sampling_config {
+    uint32_t seed;
+    int32_t  n_prev;
+    int32_t  top_k;
+    float    top_p;
+    float    min_p;
+    float    typ_p;
+    float    temp;
+    int32_t  penalty_last_n;
+    float    penalty_repeat;
+    float    penalty_freq;
+    float    penalty_present;
+    int32_t  mirostat;
+    float    mirostat_tau;
+    float    mirostat_eta;
+} lfg_sampling_config;
+
+// Session configuration. Owns decoding + sampling behavior.
+typedef struct lfg_session_config {
+    int n_threads;
+    int n_ctx;
+    int n_batch;
+    bool enable_healing;
+    bool structured_checkpointing; // Snapshot sampler state for structured decoding.
+    int reasoning_budget;          // 0 = disabled. Number of tokens allowed for reasoning.
+    lfg_sampling_config sampling;
+} lfg_session_config;
+
+// Configuration helpers.
+LFG_API lfg_sampling_config lfg_sampling_default_config(void);
+LFG_API lfg_session_config lfg_session_default_config(void);
+
+// Session lifecycle.
+LFG_API lfg_session * lfg_session_create(struct lfg_model * model, const lfg_session_config * config);
+LFG_API void lfg_session_free(lfg_session * session);
+LFG_API void lfg_session_reset(lfg_session * session);
+
+// Structured decoding. If grammar_or_schema begins with '{', it is treated as JSON schema.
+LFG_API bool lfg_session_configure_structured(lfg_session * session,
+                                                    const char * grammar_or_schema,
+                                                    const char * root_rule);
+
+// Configure tokens that delimit a reasoning/thinking block.
+// Constraints are suspended while inside these blocks.
+LFG_API void lfg_session_configure_reasoning(lfg_session * session,
+                                                   const lfg_token * start_tokens, size_t n_start,
+                                                   const lfg_token * end_tokens,   size_t n_end);
+
+// Convert a JSON schema (as a string) to a grammar. Returns number of bytes written
+// (excluding the null terminator), or the required size if buf is null or buf_size is 0.
+// Returns -1 on error; use lfg_get_last_error for details.
+LFG_API int32_t lfg_json_schema_to_grammar(const char * json_schema,
+                                                 bool force_gbnf,
+                                                 char * buf,
+                                                 size_t buf_size);
+
+// Token ingestion / decoding.
+LFG_API bool lfg_session_ingest_tokens(lfg_session * session,
+                                             const lfg_token * tokens,
+                                             size_t n_tokens,
+                                             bool update_sampler);
+LFG_API bool lfg_session_decode(lfg_session * session);
+LFG_API lfg_token lfg_session_sample(lfg_session * session);
+LFG_API bool lfg_session_heal_last_token(lfg_session * session);
+
+// Logits access. Returns number of logits copied or required size when out == nullptr.
+LFG_API int32_t lfg_session_get_logits(lfg_session * session, float * out, int32_t max_out);
+LFG_API int32_t lfg_session_get_vocab_size(lfg_session * session);
+
+// Checkpointing.
+LFG_API lfg_checkpoint * lfg_session_create_checkpoint(lfg_session * session);
+typedef struct lfg_checkpoint_restore_options {
+    bool restore_sampler_state;
+    bool restore_grammar;
+} lfg_checkpoint_restore_options;
+// Default restore options: restore sampler state + grammar.
+LFG_API lfg_checkpoint_restore_options lfg_checkpoint_restore_default_options(void);
+LFG_API bool lfg_session_restore_checkpoint_ex(lfg_session * session,
+                                                     const lfg_checkpoint * checkpoint,
+                                                     const lfg_checkpoint_restore_options * options);
+LFG_API bool lfg_session_restore_checkpoint(lfg_session * session, const lfg_checkpoint * checkpoint);
+LFG_API void lfg_checkpoint_free(lfg_checkpoint * checkpoint);
+
+// --- Model Loader C API (replaces liquid::ModelLoader) ---
+
+typedef struct lfg_model_load_config {
+    const char * model_path;
+    bool use_mmap;
+    bool use_mlock;
+    int  n_gpu_layers;
+} lfg_model_load_config;
+
+typedef struct lfg_model_stats {
+    uint64_t n_params;
+    uint64_t size_bytes;
+    int32_t  n_vocab;
+    int32_t  n_ctx_train;
+} lfg_model_stats;
+
+LFG_API lfg_model_load_config lfg_model_load_default_config(void);
+LFG_API struct lfg_model * lfg_load_model(const lfg_model_load_config * config);
+LFG_API lfg_model_stats lfg_model_get_stats(const struct lfg_model * model);
+LFG_API int32_t lfg_model_get_metadata_str(const struct lfg_model * model,
+                                                 const char * key,
+                                                 char * buf, size_t buf_size);
+
+#ifdef __cplusplus
+} // extern "C"
+#endif

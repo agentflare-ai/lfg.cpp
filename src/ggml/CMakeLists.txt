@@ -23,14 +23,14 @@ add_subdirectory(
 )
 
 # Preserve Liquid target names expected across the build.
-if (TARGET ggml-base AND NOT TARGET lfm_ggml_base)
-    add_library(lfm_ggml_base ALIAS ggml-base)
+if (TARGET ggml-base AND NOT TARGET lfg_ggml_base)
+    add_library(lfg_ggml_base ALIAS ggml-base)
 endif()
 
-if (TARGET ggml AND NOT TARGET lfm_ggml)
-    add_library(lfm_ggml ALIAS ggml)
+if (TARGET ggml AND NOT TARGET lfg_ggml)
+    add_library(lfg_ggml ALIAS ggml)
 endif()
 
-if (TARGET ggml AND NOT TARGET lfm_ggml::ggml)
-    add_library(lfm_ggml::ggml ALIAS ggml)
+if (TARGET ggml AND NOT TARGET lfg_ggml::ggml)
+    add_library(lfg_ggml::ggml ALIAS ggml)
 endif()

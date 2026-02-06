@@ -61,11 +61,11 @@ def main():
         print(f"error: model not found: {model_path}", file=sys.stderr)
         return 2
 
-    lfm_bin = os.path.join(args.bin_dir, "liquid-compare")
+    lfg_bin = os.path.join(args.bin_dir, "liquid-compare")
     llama_bin = os.path.join(args.bin_dir, "llama-compare")
 
-    if not os.path.exists(lfm_bin):
-        print(f"error: missing {lfm_bin}", file=sys.stderr)
+    if not os.path.exists(lfg_bin):
+        print(f"error: missing {lfg_bin}", file=sys.stderr)
         return 2
     if not os.path.exists(llama_bin):
         print(f"error: missing {llama_bin}", file=sys.stderr)
@@ -113,15 +113,15 @@ def main():
     for i in range(args.repeat):
         run_entry = {"iteration": i + 1}
 
-        lfm_cmd = [lfm_bin] + base_args
+        lfg_cmd = [lfg_bin] + base_args
         llama_cmd = [llama_bin] + base_args
         if device_flag:
-            lfm_cmd.append(device_flag)
+            lfg_cmd.append(device_flag)
             llama_cmd.append(device_flag)
         if extra_flags:
-            lfm_cmd += extra_flags
+            lfg_cmd += extra_flags
             llama_cmd += extra_flags
-        lfm_cmd.append("--quiet")
+        lfg_cmd.append("--quiet")
         llama_cmd.append("--quiet")
 
         if args.swap_order:
@@ -133,17 +133,17 @@ def main():
                 "stderr": err,
             }
 
-            rc, out, err = run_cmd(lfm_cmd)
+            rc, out, err = run_cmd(lfg_cmd)
             run_entry["liquid"] = {
-                "cmd": lfm_cmd,
+                "cmd": lfg_cmd,
                 "returncode": rc,
                 "metrics": parse_metrics(err),
                 "stderr": err,
             }
         else:
-            rc, out, err = run_cmd(lfm_cmd)
+            rc, out, err = run_cmd(lfg_cmd)
             run_entry["liquid"] = {
-                "cmd": lfm_cmd,
+                "cmd": lfg_cmd,
                 "returncode": rc,
                 "metrics": parse_metrics(err),
                 "stderr": err,
@@ -168,13 +168,13 @@ def main():
     print(f"Wrote {snapshot_path}")
 
     for run in results["runs"]:
-        lfm_tps = run["liquid"]["metrics"].get("tps")
+        lfg_tps = run["liquid"]["metrics"].get("tps")
         llama_tps = run["llama"]["metrics"].get("tps")
         ratio = None
-        if lfm_tps is not None and llama_tps:
-            ratio = lfm_tps / llama_tps
+        if lfg_tps is not None and llama_tps:
+            ratio = lfg_tps / llama_tps
         print(
-            f"Run {run['iteration']}: Liquid TPS {lfm_tps} | Llama TPS {llama_tps}"
+            f"Run {run['iteration']}: Liquid TPS {lfg_tps} | Llama TPS {llama_tps}"
             + (f" | Ratio {ratio:.3f}" if ratio is not None else "")
         )
 

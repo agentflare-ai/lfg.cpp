@@ -1,7 +1,7 @@
 // Minimal liquid text generation for comparison
-// Mirrors llama_compare.cpp exactly but uses lfm_* API
+// Mirrors llama_compare.cpp exactly but uses lfg_* API
 
-#include "lfm_inference.h"
+#include "lfg_inference.h"
 #include "ggml-backend.h"
 
 #include <cstdio>
@@ -88,7 +88,7 @@ int main(int argc, char** argv) {
     ggml_backend_load_all();
 
     // Model params
-    lfm_model_params model_params = lfm_model_default_params();
+    lfg_model_params model_params = lfg_model_default_params();
     model_params.n_gpu_layers = ngl;
     std::vector<ggml_backend_dev_t> devices;
     if (device != device_pref::auto_select) {
@@ -109,16 +109,16 @@ int main(int argc, char** argv) {
         }
     }
 
-    lfm_model* model = lfm_model_load_from_file(model_path.c_str(), model_params);
+    lfg_model* model = lfg_model_load_from_file(model_path.c_str(), model_params);
     if (!model) {
         fprintf(stderr, "Failed to load model\n");
         return 1;
     }
 
-    const lfm_vocab* vocab = lfm_model_get_vocab(model);
+    const lfg_vocab* vocab = lfg_model_get_vocab(model);
 
     // Context params
-    lfm_context_params ctx_params = lfm_context_default_params();
+    lfg_context_params ctx_params = lfg_context_default_params();
     ctx_params.n_ctx = 2048;
     ctx_params.n_batch = 512;
     ctx_params.n_threads = n_threads;
@@ -126,41 +126,41 @@ int main(int argc, char** argv) {
     ctx_params.offload_kqv = !no_kv_offload;
     ctx_params.op_offload = !no_op_offload;
     if (no_flash_attn) {
-        ctx_params.flash_attn_type = LFM_FLASH_ATTN_TYPE_DISABLED;
+        ctx_params.flash_attn_type = LFG_FLASH_ATTN_TYPE_DISABLED;
     } else if (force_flash_attn) {
-        ctx_params.flash_attn_type = LFM_FLASH_ATTN_TYPE_ENABLED;
+        ctx_params.flash_attn_type = LFG_FLASH_ATTN_TYPE_ENABLED;
     }
 
     fprintf(stderr, "offload_kqv: %s\n", ctx_params.offload_kqv ? "true" : "false");
     fprintf(stderr, "op_offload: %s\n", ctx_params.op_offload ? "true" : "false");
     fprintf(stderr, "flash_attn: %s\n",
-            ctx_params.flash_attn_type == LFM_FLASH_ATTN_TYPE_DISABLED ? "disabled" :
-            (ctx_params.flash_attn_type == LFM_FLASH_ATTN_TYPE_ENABLED ? "enabled" : "auto"));
+            ctx_params.flash_attn_type == LFG_FLASH_ATTN_TYPE_DISABLED ? "disabled" :
+            (ctx_params.flash_attn_type == LFG_FLASH_ATTN_TYPE_ENABLED ? "enabled" : "auto"));
 
-    lfm_context* ctx = lfm_init_from_model(model, ctx_params);
+    lfg_context* ctx = lfg_init_from_model(model, ctx_params);
     if (!ctx) {
         fprintf(stderr, "Failed to create context\n");
-        lfm_model_free(model);
+        lfg_model_free(model);
         return 1;
     }
 
     // Sampler - use greedy for deterministic comparison
-    auto sparams = lfm_sampler_chain_default_params();
-    lfm_sampler* smpl = lfm_sampler_chain_init(sparams);
-    lfm_sampler_chain_add(smpl, lfm_sampler_init_greedy());
+    auto sparams = lfg_sampler_chain_default_params();
+    lfg_sampler* smpl = lfg_sampler_chain_init(sparams);
+    lfg_sampler_chain_add(smpl, lfg_sampler_init_greedy());
 
     // Start with BOS token
-    lfm_token bos = lfm_vocab_bos(vocab);
-    lfm_batch batch = lfm_batch_get_one(&bos, 1);
+    lfg_token bos = lfg_vocab_bos(vocab);
+    lfg_batch batch = lfg_batch_get_one(&bos, 1);
 
     auto start = std::chrono::high_resolution_clock::now();
 
     // Decode BOS
-    if (lfm_decode(ctx, batch)) {
+    if (lfg_decode(ctx, batch)) {
         fprintf(stderr, "Failed to decode BOS\n");
-        lfm_sampler_free(smpl);
-        lfm_free(ctx);
-        lfm_model_free(model);
+        lfg_sampler_free(smpl);
+        lfg_free(ctx);
+        lfg_model_free(model);
         return 1;
     }
 
@@ -170,8 +170,8 @@ int main(int argc, char** argv) {
     // Generation loop
     for (int i = 0; i < n_predict; ++i) {
         // Get logits before sampling
-        float* logits = lfm_get_logits(ctx);
-        int n_vocab = lfm_vocab_n_tokens(vocab);
+        float* logits = lfg_get_logits(ctx);
+        int n_vocab = lfg_vocab_n_tokens(vocab);
 
         // Find top 3 logits for debugging
         if (!quiet && i >= 45 && i <= 48) {
@@ -185,29 +185,29 @@ int main(int argc, char** argv) {
             fprintf(stderr, "Logits[%d]: top3=(%d:%.4f, %d:%.4f, %d:%.4f)\n", i, idx1, max1, idx2, max2, idx3, max3);
         }
 
-        lfm_token new_token = lfm_sampler_sample(smpl, ctx, -1);
+        lfg_token new_token = lfg_sampler_sample(smpl, ctx, -1);
 
         if (!quiet) {
             // Debug: print token ID
             fprintf(stderr, "Token[%d]: %d\n", i, new_token);
         }
 
-        if (lfm_vocab_is_eog(vocab, new_token)) {
+        if (lfg_vocab_is_eog(vocab, new_token)) {
             break;
         }
 
         if (!quiet) {
             // Convert token to text
             char buf[256];
-            int n = lfm_token_to_piece(vocab, new_token, buf, sizeof(buf), 0, true);
+            int n = lfg_token_to_piece(vocab, new_token, buf, sizeof(buf), 0, true);
             if (n > 0) {
                 output.append(buf, n);
             }
         }
 
         // Prepare next batch
-        batch = lfm_batch_get_one(&new_token, 1);
-        if (lfm_decode(ctx, batch)) {
+        batch = lfg_batch_get_one(&new_token, 1);
+        if (lfg_decode(ctx, batch)) {
             break;
         }
 
@@ -229,9 +229,9 @@ int main(int argc, char** argv) {
         printf("%s\n", output.c_str());
     }
 
-    lfm_sampler_free(smpl);
-    lfm_free(ctx);
-    lfm_model_free(model);
+    lfg_sampler_free(smpl);
+    lfg_free(ctx);
+    lfg_model_free(model);
 
     return 0;
 }

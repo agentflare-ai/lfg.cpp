@@ -1,13 +1,10 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest.h"
-#include "../inference/inference_core.h"
-#include "../loader/model_loader.h"
+#include "../inference/lfg_api.h"
 #include <spdlog/spdlog.h>
 #include <vector>
 #include <string>
 #include <fstream>
-
-using namespace liquid;
 
 const std::string JSON_GRAMMAR = R"(
 root   ::= object
@@ -20,16 +17,16 @@ ws     ::= ([ \t\n] ws)?
 )";
 
 // Helper to detokenize a single token
-std::string token_to_str(const lfm_vocab* vocab, lfm_token token) {
+std::string token_to_str(const lfg_vocab* vocab, lfg_token token) {
     char buf[256];
-    // Cast away const because lfm_detokenize takes non-const vocab* (C API legacy likely)
-    int n = lfm_detokenize(const_cast<lfm_vocab*>(vocab), &token, 1, buf, sizeof(buf), false, false);
-    if (n < 0) return ""; 
+    // Cast away const because lfg_detokenize takes non-const vocab* (C API legacy likely)
+    int n = lfg_detokenize(const_cast<lfg_vocab*>(vocab), &token, 1, buf, sizeof(buf), false, false);
+    if (n < 0) return "";
     return std::string(buf, n);
 }
 
 TEST_CASE("Reasoning Model Healing and Checkpointing Integration") {
-    lfm_backend_init();
+    lfg_backend_init();
 
     // 1. Load Model
     std::string model_path = "models/LFM2.5-1.2B-Thinking-GGUF/LFM2.5-1.2B-Thinking-Q4_K_M.gguf";
@@ -39,41 +36,43 @@ TEST_CASE("Reasoning Model Healing and Checkpointing Integration") {
         return;
     }
 
-    ModelLoader::ModelConfig load_config;
-    load_config.model_path = model_path;
+    lfg_model_load_config load_config = lfg_model_load_default_config();
+    load_config.model_path = model_path.c_str();
     load_config.n_gpu_layers = 0; // CPU only for deterministic testing
 
-    lfm_model* model = ModelLoader::LoadModel(load_config);
+    lfg_model* model = lfg_load_model(&load_config);
     REQUIRE(model != nullptr);
 
-    // 2. Configure InferenceCore
-    InferenceCore::Config config;
+    // 2. Configure session
+    lfg_session_config config = lfg_session_default_config();
     config.n_ctx = 2048;
     config.sampling.temp = 0.0f; // Deterministic
     config.sampling.seed = 12345;
     config.enable_healing = true; // Essential for this test
 
-    InferenceCore core(model, config);
+    lfg_session * session = lfg_session_create(model, &config);
 
     // 3. Configure Reasoning Tokens (Standard LFM2.5 Thinking tokens)
     // Assuming <think> = 32001, </think> = 32002 based on previous context
-    core.ConfigureReasoning({32001}, {32002});
+    lfg_token start_tok = 32001;
+    lfg_token end_tok = 32002;
+    lfg_session_configure_reasoning(session, &start_tok, 1, &end_tok, 1);
 
     // 4. Configure Grammar
     // Recursive grammar to ensure stack never empties unexpectedly
     const std::string SIMPLE_WORD_GRAMMAR = R"(
     root ::= [a-z]+
     )";
-    core.ConfigureStructuredDecoding(SIMPLE_WORD_GRAMMAR);
+    lfg_session_configure_structured(session, SIMPLE_WORD_GRAMMAR.c_str(), "root");
 
     // 5. Setup Scenario: Partial Word
-    const auto* vocab = lfm_model_get_vocab(model);
-    std::string partial_prompt = "resp"; 
-    
+    const auto* vocab = lfg_model_get_vocab(model);
+    std::string partial_prompt = "resp";
+
     // Tokenize
-    std::vector<lfm_token> tokens(1024);
+    std::vector<lfg_token> tokens(1024);
     // add_special=false to avoid BOS conflicts with simple grammar tests
-    int n = lfm_tokenize(const_cast<lfm_vocab*>(vocab), partial_prompt.c_str(), partial_prompt.length(), tokens.data(), tokens.size(), false, false);
+    int n = lfg_tokenize(const_cast<lfg_vocab*>(vocab), partial_prompt.c_str(), partial_prompt.length(), tokens.data(), tokens.size(), false, false);
     tokens.resize(n);
 
     MESSAGE("Partial prompt tokens: " << n);
@@ -82,29 +81,29 @@ TEST_CASE("Reasoning Model Healing and Checkpointing Integration") {
     }
 
     // Ingest tokens
-    core.IngestTokens(tokens);
+    lfg_session_ingest_tokens(session, tokens.data(), tokens.size(), true);
 
     // 6. Create Checkpoint BEFORE Healing
-    auto cp_before_heal = core.CreateCheckpoint();
-    
+    lfg_checkpoint * cp_before_heal = lfg_session_create_checkpoint(session);
+
     // --- Run A: Heal and Generate ---
     MESSAGE("Starting Run A...");
-    std::vector<lfm_token> output_a;
+    std::vector<lfg_token> output_a;
     bool healing_grammar_works = true;
 
     try {
         // HealLastToken should try to complete "resp" -> "response"
-        bool healed_a = core.HealLastToken();
+        bool healed_a = lfg_session_heal_last_token(session);
         MESSAGE("Healed: " << (healed_a ? "YES" : "NO"));
-        
+
         // Generate until end (grammar enforces "response")
         for(int i=0; i<10; ++i) {
-            if (!core.Decode()) break;
-            lfm_token t = core.Sample();
+            if (!lfg_session_decode(session)) break;
+            lfg_token t = lfg_session_sample(session);
             output_a.push_back(t);
-            core.IngestTokens({t});
-            
-            if (t == lfm_vocab_eos(vocab)) break;
+            lfg_session_ingest_tokens(session, &t, 1, true);
+
+            if (t == lfg_vocab_eos(vocab)) break;
         }
     } catch (const std::exception& e) {
         MESSAGE("Error in Run A (Healing + Grammar): " << e.what());
@@ -117,22 +116,22 @@ TEST_CASE("Reasoning Model Healing and Checkpointing Integration") {
     try {
         // Do not call Reset() because Checkpoint relies on KV cache being present.
         // RestoreCheckpoint will truncate the context back to the checkpoint point.
-        bool restore_ok = core.RestoreCheckpoint(cp_before_heal);
+        bool restore_ok = lfg_session_restore_checkpoint(session, cp_before_heal);
         CHECK(restore_ok);
-        
+
         if (restore_ok) {
             // Note: If grammar state is not restored, this might fail or produce different results
-            core.HealLastToken(); // Attempt same logic
-            
-            std::vector<lfm_token> output_b;
+            lfg_session_heal_last_token(session); // Attempt same logic
+
+            std::vector<lfg_token> output_b;
             for(int i=0; i<10; ++i) {
-                if (!core.Decode()) break;
-                lfm_token t = core.Sample();
+                if (!lfg_session_decode(session)) break;
+                lfg_token t = lfg_session_sample(session);
                 output_b.push_back(t);
-                core.IngestTokens({t});
-                if (t == lfm_vocab_eos(vocab)) break;
+                lfg_session_ingest_tokens(session, &t, 1, true);
+                if (t == lfg_vocab_eos(vocab)) break;
             }
-            
+
             if (healing_grammar_works) {
                 CHECK(output_a.size() == output_b.size());
                 if (output_a.size() == output_b.size()) {
@@ -150,5 +149,7 @@ TEST_CASE("Reasoning Model Healing and Checkpointing Integration") {
         FAIL("FATAL ERROR: Checkpoint restoration with Grammar failed.");
     }
 
-    lfm_model_free(model);
+    lfg_checkpoint_free(cp_before_heal);
+    lfg_session_free(session);
+    lfg_model_free(model);
 }

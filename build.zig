@@ -152,15 +152,15 @@ fn addTargetArtifacts(
         cpu_only,
     );
     const llama_core = addLlamaCore(b, effective_target, optimize, ggml, cxx_flags_slice, framework_path, private_framework_path);
-    const lfm_vision = addLiquidVision(b, effective_target, optimize, ggml, spdlog_include, spdlog_level, cxx_flags_slice, framework_path, private_framework_path);
-    const lfm_core = addLiquidCore(b, effective_target, optimize, ggml, lfm_vision, spdlog_include, spdlog_level, cxx_flags_slice, framework_path, private_framework_path);
+    const lfg_vision = addLiquidVision(b, effective_target, optimize, ggml, spdlog_include, spdlog_level, cxx_flags_slice, framework_path, private_framework_path);
+    const lfg_core = addLiquidCore(b, effective_target, optimize, ggml, lfg_vision, spdlog_include, spdlog_level, cxx_flags_slice, framework_path, private_framework_path);
 
     if (build_tools) {
-        addExecutables(b, effective_target, optimize, ggml, llama_core, lfm_vision, lfm_core, spdlog_include, cxx_flags_slice, framework_path, private_framework_path, sysroot);
+        addExecutables(b, effective_target, optimize, ggml, llama_core, lfg_vision, lfg_core, spdlog_include, cxx_flags_slice, framework_path, private_framework_path, sysroot);
         b.installArtifact(ggml);
         b.installArtifact(llama_core);
-        b.installArtifact(lfm_vision);
-        b.installArtifact(lfm_core);
+        b.installArtifact(lfg_vision);
+        b.installArtifact(lfg_core);
     }
 
     const shared_link_args = makeSharedLinkArgs(b, effective_target, enable_metal, enable_accelerate, enable_openmp, sysroot);
@@ -168,7 +168,7 @@ fn addTargetArtifacts(
 
     if (build_baseline_combined) {
         const suffix = if (multi_target) b.fmt("-{s}", .{target_label}) else "";
-        addCombinedLibrary(b, ggml, lfm_core, lfm_vision, effective_target, optimize, suffix, shared_link_args, windows_shared);
+        addCombinedLibrary(b, ggml, lfg_core, lfg_vision, effective_target, optimize, suffix, shared_link_args, windows_shared);
     }
 
     if (build_isa_combined) {
@@ -198,8 +198,8 @@ fn addTargetArtifacts(
 fn addCombinedLibrary(
     b: *std.Build,
     ggml: *std.Build.Step.Compile,
-    lfm_core: *std.Build.Step.Compile,
-    lfm_vision: *std.Build.Step.Compile,
+    lfg_core: *std.Build.Step.Compile,
+    lfg_vision: *std.Build.Step.Compile,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     name_suffix: []const u8,
@@ -290,9 +290,9 @@ fn addCombinedLibrary(
     if (!is_windows or !build_shared) {
         pack.addArg("__no_implib__");
     }
-    pack.addFileArg(lfm_core.getEmittedBin());
+    pack.addFileArg(lfg_core.getEmittedBin());
     pack.addFileArg(ggml.getEmittedBin());
-    pack.addFileArg(lfm_vision.getEmittedBin());
+    pack.addFileArg(lfg_vision.getEmittedBin());
     pack.addArg(b.graph.zig_exe);
     pack.addArg(b.pathFromRoot("."));
     pack.addArg(target_triple);
@@ -593,7 +593,7 @@ fn addLiquidVision(
 ) *std.Build.Step.Compile {
     const vision_mod = createModule(b, target, optimize, true, optimize == .ReleaseFast, framework_path, private_framework_path);
     const vision = b.addLibrary(.{
-        .name = "lfm_vision",
+        .name = "lfg_vision",
         .root_module = vision_mod,
         .linkage = .static,
     });
@@ -626,7 +626,7 @@ fn addLiquidCore(
 ) *std.Build.Step.Compile {
     const core_mod = createModule(b, target, optimize, true, optimize == .ReleaseFast, framework_path, private_framework_path);
     const core = b.addLibrary(.{
-        .name = "lfm_core",
+        .name = "lfg_core",
         .root_module = core_mod,
         .linkage = .static,
     });
@@ -670,7 +670,7 @@ fn addExecutables(
     ggml: *std.Build.Step.Compile,
     llama_core: *std.Build.Step.Compile,
     vision: *std.Build.Step.Compile,
-    lfm_core: *std.Build.Step.Compile,
+    lfg_core: *std.Build.Step.Compile,
     spdlog_include: std.Build.LazyPath,
     cxx_flags: []const []const u8,
     framework_path: ?[]const u8,
@@ -680,7 +680,7 @@ fn addExecutables(
     _ = vision;
 
     const exe = addExe(b, target, optimize, "lfg_cli", &[_][]const u8{"src/main.cpp"}, spdlog_include, cxx_flags, framework_path, private_framework_path);
-    exe.linkLibrary(lfm_core);
+    exe.linkLibrary(lfg_core);
     addCommonExeLinks(exe, target, framework_path, private_framework_path, sysroot);
     b.installArtifact(exe);
 
@@ -689,7 +689,7 @@ fn addExecutables(
     eval.addIncludePath(b.path("third_party/llama.cpp"));
     eval.addIncludePath(b.path("third_party/llama.cpp/include"));
     eval.addIncludePath(b.path("src/ggml"));
-    eval.linkLibrary(lfm_core);
+    eval.linkLibrary(lfg_core);
     eval.linkLibrary(ggml);
     addCommonExeLinks(eval, target, framework_path, private_framework_path, sysroot);
     b.installArtifact(eval);
@@ -701,17 +701,17 @@ fn addExecutables(
     addCommonExeLinks(llama_compare, target, framework_path, private_framework_path, sysroot);
     b.installArtifact(llama_compare);
 
-    const lfm_compare = addExe(b, target, optimize, "lfg-compare", &[_][]const u8{"src/eval/lfg_compare.cpp"}, spdlog_include, cxx_flags, framework_path, private_framework_path);
-    lfm_compare.linkLibrary(lfm_core);
-    lfm_compare.linkLibrary(ggml);
-    addCommonExeLinks(lfm_compare, target, framework_path, private_framework_path, sysroot);
-    b.installArtifact(lfm_compare);
+    const lfg_compare = addExe(b, target, optimize, "lfg-compare", &[_][]const u8{"src/eval/lfg_compare.cpp"}, spdlog_include, cxx_flags, framework_path, private_framework_path);
+    lfg_compare.linkLibrary(lfg_core);
+    lfg_compare.linkLibrary(ggml);
+    addCommonExeLinks(lfg_compare, target, framework_path, private_framework_path, sysroot);
+    b.installArtifact(lfg_compare);
 
-    const lfm_struct = addExe(b, target, optimize, "lfg-structured-compare", &[_][]const u8{"src/eval/lfg_structured_compare.cpp"}, spdlog_include, cxx_flags, framework_path, private_framework_path);
-    lfm_struct.linkLibrary(lfm_core);
-    lfm_struct.linkLibrary(ggml);
-    addCommonExeLinks(lfm_struct, target, framework_path, private_framework_path, sysroot);
-    b.installArtifact(lfm_struct);
+    const lfg_struct = addExe(b, target, optimize, "lfg-structured-compare", &[_][]const u8{"src/eval/lfg_structured_compare.cpp"}, spdlog_include, cxx_flags, framework_path, private_framework_path);
+    lfg_struct.linkLibrary(lfg_core);
+    lfg_struct.linkLibrary(ggml);
+    addCommonExeLinks(lfg_struct, target, framework_path, private_framework_path, sysroot);
+    b.installArtifact(lfg_struct);
 
     const llama_struct = addExe(b, target, optimize, "llama-structured-compare", &[_][]const u8{
         "src/eval/llama_structured_compare.cpp",
@@ -724,8 +724,8 @@ fn addExecutables(
     addCommonExeLinks(llama_struct, target, framework_path, private_framework_path, sysroot);
     b.installArtifact(llama_struct);
 
-    addBenchmarks(b, target, optimize, ggml, lfm_core, spdlog_include, cxx_flags, framework_path, private_framework_path, sysroot);
-    addTests(b, target, optimize, ggml, lfm_core, spdlog_include, cxx_flags, framework_path, private_framework_path, sysroot);
+    addBenchmarks(b, target, optimize, ggml, lfg_core, spdlog_include, cxx_flags, framework_path, private_framework_path, sysroot);
+    addTests(b, target, optimize, ggml, lfg_core, spdlog_include, cxx_flags, framework_path, private_framework_path, sysroot);
 }
 
 fn addBenchmarks(
@@ -733,7 +733,7 @@ fn addBenchmarks(
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     ggml: *std.Build.Step.Compile,
-    lfm_core: *std.Build.Step.Compile,
+    lfg_core: *std.Build.Step.Compile,
     spdlog_include: std.Build.LazyPath,
     cxx_flags: []const []const u8,
     framework_path: ?[]const u8,
@@ -756,7 +756,7 @@ fn addBenchmarks(
 
     for (bench_names, 0..) |name, i| {
         const exe = addExe(b, target, optimize, name, &[_][]const u8{bench_files[i]}, spdlog_include, cxx_flags, framework_path, private_framework_path);
-        exe.linkLibrary(lfm_core);
+        exe.linkLibrary(lfg_core);
         exe.linkLibrary(ggml);
         addCommonExeLinks(exe, target, framework_path, private_framework_path, sysroot);
         b.installArtifact(exe);
@@ -769,7 +769,7 @@ fn addTests(
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     ggml: *std.Build.Step.Compile,
-    lfm_core: *std.Build.Step.Compile,
+    lfg_core: *std.Build.Step.Compile,
     spdlog_include: std.Build.LazyPath,
     cxx_flags: []const []const u8,
     framework_path: ?[]const u8,
@@ -794,7 +794,9 @@ fn addTests(
         "test_reasoning_healing_integration",
         "test_complex_reasoning_healing",
         "test_reasoning_budget",
+        "test_reasoning_gate",
         "test_model_capabilities",
+        "test_parity",
     };
 
     const test_files = [_][]const u8{
@@ -815,7 +817,9 @@ fn addTests(
         "src/tests/test_reasoning_healing_integration.cpp",
         "src/tests/test_complex_reasoning_healing.cpp",
         "src/tests/test_reasoning_budget.cpp",
+        "src/tests/test_reasoning_gate.cpp",
         "src/tests/test_model_capabilities.cpp",
+        "src/tests/test_parity.cpp",
     };
 
     var test_step = b.step("test", "Build and run tests");
@@ -827,8 +831,8 @@ fn addTests(
         exe.addIncludePath(b.path("src/inference"));
         exe.addIncludePath(b.path("src/loader"));
         exe.addIncludePath(spdlog_include);
-        exe.linkLibrary(lfm_core);
-        if (std.mem.eql(u8, name, "test_reasoning_healing_integration") or std.mem.eql(u8, name, "test_complex_reasoning_healing") or std.mem.eql(u8, name, "test_reasoning_budget")) {
+        exe.linkLibrary(lfg_core);
+        if (std.mem.eql(u8, name, "test_reasoning_healing_integration") or std.mem.eql(u8, name, "test_complex_reasoning_healing") or std.mem.eql(u8, name, "test_reasoning_budget") or std.mem.eql(u8, name, "test_reasoning_gate")) {
             exe.linkLibrary(ggml);
         }
         addCommonExeLinks(exe, target, framework_path, private_framework_path, sysroot);
@@ -1135,11 +1139,11 @@ fn addIsaCombinedLibraries(
             private_framework_path,
             cpu_only,
         );
-        const lfm_vision = addLiquidVision(b, variant_target, optimize, ggml, spdlog_include, spdlog_level, flags.cxx, framework_path, private_framework_path);
-        const lfm_core = addLiquidCore(b, variant_target, optimize, ggml, lfm_vision, spdlog_include, spdlog_level, flags.cxx, framework_path, private_framework_path);
+        const lfg_vision = addLiquidVision(b, variant_target, optimize, ggml, spdlog_include, spdlog_level, flags.cxx, framework_path, private_framework_path);
+        const lfg_core = addLiquidCore(b, variant_target, optimize, ggml, lfg_vision, spdlog_include, spdlog_level, flags.cxx, framework_path, private_framework_path);
 
         const suffix = b.fmt("-{s}-{s}", .{ target_label, variant.name });
-        addCombinedLibrary(b, ggml, lfm_core, lfm_vision, variant_target, optimize, suffix, shared_link_args, windows_shared);
+        addCombinedLibrary(b, ggml, lfg_core, lfg_vision, variant_target, optimize, suffix, shared_link_args, windows_shared);
     }
 }
 

@@ -1,8 +1,7 @@
 // Compare LFG structured decoding with healing + checkpointing.
 // Emits a JSON report to stdout.
 
-#include "../inference/inference_core.h"
-#include "../loader/model_loader.h"
+#include "../inference/lfg_api.h"
 #include "../inference/json_schema_to_grammar.h"
 #include <nlohmann/json.hpp>
 
@@ -90,9 +89,9 @@ bool JsonIsComplete(const std::string& text) {
     return false;
 }
 
-std::string TokenToPiece(const lfm_vocab* vocab, lfm_token token) {
+std::string TokenToPiece(const lfg_vocab* vocab, lfg_token token) {
     char buf[256];
-    int n = lfm_token_to_piece(vocab, token, buf, sizeof(buf), 0, false);
+    int n = lfg_token_to_piece(vocab, token, buf, sizeof(buf), 0, false);
     if (n <= 0) return "";
     return std::string(buf, n);
 }
@@ -111,17 +110,17 @@ int main(int argc, char** argv) {
     const int n_threads = argc > 4 ? std::stoi(argv[4]) : 4;
     const int checkpoint_step = argc > 5 ? std::stoi(argv[5]) : 1;
 
-    liquid::ModelLoader::ModelConfig load_config;
-    load_config.model_path = model_path;
+    lfg_model_load_config load_config = lfg_model_load_default_config();
+    load_config.model_path = model_path.c_str();
     load_config.n_gpu_layers = 0;
 
-    auto* model = liquid::ModelLoader::LoadModel(load_config);
+    auto* model = lfg_load_model(&load_config);
     if (!model) {
         spdlog::error("Failed to load model: {}", model_path);
         return 1;
     }
 
-    liquid::InferenceCore::Config config;
+    lfg_session_config config = lfg_session_default_config();
     config.n_ctx = 2048;
     config.n_threads = n_threads;
     config.enable_healing = true;
@@ -132,61 +131,63 @@ int main(int argc, char** argv) {
     config.sampling.min_p = 0.0f;
     config.sampling.penalty_repeat = 1.0f;
 
-    liquid::InferenceCore core(model, config);
+    lfg_session *session = lfg_session_create(model, &config);
 
     const std::string grammar = BuildGrammarWithPreamble();
-    core.ConfigureStructuredDecoding(grammar, "root");
+    lfg_session_configure_structured(session, grammar.c_str(), "root");
 
-    const char * model_template = lfm_model_chat_template(model, nullptr);
+    const char * model_template = lfg_model_chat_template(model, nullptr);
     const char * tmpl = model_template ? model_template : "chatml";
 
-    std::vector<lfm_chat_message> messages;
+    std::vector<lfg_chat_message> messages;
     messages.push_back({"system", kSystemPrompt.c_str()});
     messages.push_back({"user", kUserPrompt.c_str()});
 
-    int32_t required = lfm_chat_apply_template(
+    int32_t required = lfg_chat_apply_template(
         tmpl, messages.data(), messages.size(), true, nullptr, 0);
     if (required < 0) {
         spdlog::error("Failed to apply chat template");
-        liquid::ModelLoader::FreeModel(model);
+        lfg_session_free(session);
+        lfg_model_free(model);
         return 1;
     }
 
     std::string prompt(required + 1, '\0');
-    int32_t written = lfm_chat_apply_template(
+    int32_t written = lfg_chat_apply_template(
         tmpl, messages.data(), messages.size(), true, prompt.data(), (int32_t)prompt.size());
     if (written < 0) {
         spdlog::error("Failed to render chat template");
-        liquid::ModelLoader::FreeModel(model);
+        lfg_session_free(session);
+        lfg_model_free(model);
         return 1;
     }
     prompt.resize((size_t)written);
     prompt += kJsonPrefix;
 
-    int n_tokens = lfm_tokenize(lfm_model_get_vocab(model), prompt.c_str(),
+    int n_tokens = lfg_tokenize(lfg_model_get_vocab(model), prompt.c_str(),
                                    static_cast<int32_t>(prompt.size()), nullptr, 0, false, false);
     if (n_tokens < 0) n_tokens = -n_tokens;
-    std::vector<lfm_token> tokens(n_tokens);
-    lfm_tokenize(lfm_model_get_vocab(model), prompt.c_str(),
+    std::vector<lfg_token> tokens(n_tokens);
+    lfg_tokenize(lfg_model_get_vocab(model), prompt.c_str(),
                     static_cast<int32_t>(prompt.size()), tokens.data(), n_tokens, false, false);
 
-    core.IngestTokens(tokens, true);
-    bool healed = core.HealLastToken();
+    lfg_session_ingest_tokens(session, tokens.data(), tokens.size(), true);
+    bool healed = lfg_session_heal_last_token(session);
 
     std::string generated;
     std::string generated_at_checkpoint;
-    liquid::InferenceCore::Checkpoint checkpoint;
+    lfg_checkpoint *checkpoint = nullptr;
     bool have_checkpoint = false;
 
-    const lfm_vocab* vocab = lfm_model_get_vocab(model);
+    const lfg_vocab* vocab = lfg_model_get_vocab(model);
     for (int i = 0; i < n_predict; ++i) {
-        core.Decode();
-        lfm_token token = core.Sample();
-        core.IngestTokens({token}, false);
+        lfg_session_decode(session);
+        lfg_token token = lfg_session_sample(session);
+        lfg_session_ingest_tokens(session, &token, 1, false);
         generated += TokenToPiece(vocab, token);
 
         if (!have_checkpoint && checkpoint_step > 0 && (i + 1) == checkpoint_step) {
-            checkpoint = core.CreateCheckpoint();
+            checkpoint = lfg_session_create_checkpoint(session);
             generated_at_checkpoint = generated;
             have_checkpoint = true;
         }
@@ -199,13 +200,13 @@ int main(int argc, char** argv) {
     bool checkpoint_match = false;
     std::string resumed;
     if (have_checkpoint) {
-        if (!core.RestoreCheckpoint(checkpoint)) {
+        if (!lfg_session_restore_checkpoint(session, checkpoint)) {
             spdlog::error("Failed to restore checkpoint.");
         } else {
             for (int i = 0; i < n_predict; ++i) {
-                core.Decode();
-                lfm_token token = core.Sample();
-                core.IngestTokens({token}, false);
+                lfg_session_decode(session);
+                lfg_token token = lfg_session_sample(session);
+                lfg_session_ingest_tokens(session, &token, 1, false);
                 resumed += TokenToPiece(vocab, token);
                 if (JsonIsComplete(kJsonPrefix + generated_at_checkpoint + resumed)) {
                     break;
@@ -213,6 +214,10 @@ int main(int argc, char** argv) {
             }
             checkpoint_match = (generated == generated_at_checkpoint + resumed);
         }
+    }
+
+    if (checkpoint) {
+        lfg_checkpoint_free(checkpoint);
     }
 
     const std::string full_json_text = kJsonPrefix + generated;
@@ -240,6 +245,7 @@ int main(int argc, char** argv) {
 
     std::cout << report.dump(2) << std::endl;
 
-    liquid::ModelLoader::FreeModel(model);
+    lfg_session_free(session);
+    lfg_model_free(model);
     return 0;
 }

@@ -3,8 +3,7 @@
 #include <string>
 #include <chrono>
 #include <iomanip>
-#include "model_loader.h"
-#include "inference_core.h"
+#include "../inference/lfg_api.h"
 
 // Simple JSON grammar for a list of items
 const std::string JSON_GRAMMAR = R"({
@@ -25,49 +24,35 @@ const std::string JSON_GRAMMAR = R"({
   "required": ["items"]
 })";
 
-void run_benchmark(liquid::InferenceCore& core, const std::string& name, int n_tokens, bool structured) {
+void run_benchmark(lfg_session * session, const std::string& name, int n_tokens, bool structured) {
     if (structured) {
-        core.ConfigureStructuredDecoding(JSON_GRAMMAR, "root");
+        lfg_session_configure_structured(session, JSON_GRAMMAR.c_str(), "root");
     } else {
-        core.ConfigureStructuredDecoding("", "");
+        lfg_session_configure_structured(session, "", "");
     }
 
-    core.Reset();
+    lfg_session_reset(session);
 
-    // Warmup / Prompt
-    std::string prompt = "Generate a JSON list of 5 items with 'name' and 'id'.";
-    // NOTE: In a real app we'd tokenize this. For now, let's assume valid start state or just empty prompt.
-    // If we can't easily tokenize without the vocab helper (which is hidden in model), 
-    // we might just start generating from BOS.
-    // However, InferenceCore doesn't expose Tokenize directly in header? 
-    // It seems `IngestTokens` expects tokens.
-    // Let's assume we can just start generation (empty context).
-    
-    // Actually, let's tokenize " {" to bias it if not structured? 
-    // Or just run generation.
-    
     // Start timing
     auto start = std::chrono::high_resolution_clock::now();
-    
+
     // Seed with a token (1 = BOS/Start) to generate logits
-    std::vector<int32_t> start_tokens = {1}; 
-    core.IngestTokens(start_tokens, false); // Don't update sampler for BOS, strictly follow grammar after
+    lfg_token bos = 1;
+    lfg_session_ingest_tokens(session, &bos, 1, false); // Don't update sampler for BOS
 
     int generated = 0;
     for (int i = 0; i < n_tokens; ++i) {
-        // if (!core.Decode()) break; // Decode is empty/dummy
-        auto token = core.Sample();
-        std::vector<int32_t> tokens = {token};
-        core.IngestTokens(tokens, false); // Sample() already accepted the token
+        auto token = lfg_session_sample(session);
+        lfg_session_ingest_tokens(session, &token, 1, false); // Sample() already accepted the token
         generated++;
     }
 
     auto end = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> elapsed = end - start;
-    
+
     double tps = generated / elapsed.count();
-    
-    spdlog::info("Benchmark [{}]: {} tokens in {:.2f}s ({} t/s)", 
+
+    spdlog::info("Benchmark [{}]: {} tokens in {:.2f}s ({} t/s)",
               name, generated, elapsed.count(), tps);
 }
 
@@ -77,38 +62,36 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    liquid::ModelLoader::ModelConfig config;
+    lfg_model_load_config config = lfg_model_load_default_config();
     config.model_path = argv[1];
     config.use_mmap = true;
-    config.n_gpu_layers = 100; // Try GPU if available? Protocol says CPU benchmark.
-    // Actually user protocol said "benchmark comparing ... on CPU".
-    config.n_gpu_layers = 0; 
-    // config.n_threads = 8; // Not in ModelConfig
+    config.n_gpu_layers = 0; // CPU benchmark
 
     spdlog::info("Loading model: {}...", config.model_path);
-    auto* model = liquid::ModelLoader::LoadModel(config);
+    auto* model = lfg_load_model(&config);
 
     if (!model) {
         spdlog::error("Failed to load model.");
         return 1;
     }
 
-    liquid::InferenceCore::Config core_config;
-    core_config.n_threads = 8;
-    core_config.n_ctx = 2048;
-    
-    liquid::InferenceCore core(model, core_config);
+    lfg_session_config session_config = lfg_session_default_config();
+    session_config.n_threads = 8;
+    session_config.n_ctx = 2048;
+
+    lfg_session * session = lfg_session_create(model, &session_config);
 
     spdlog::info("Starting Benchmark...");
 
     // Run Standard
-    run_benchmark(core, "Standard (Run 1)", 100, false);
-    run_benchmark(core, "Standard (Run 2)", 100, false);
+    run_benchmark(session, "Standard (Run 1)", 100, false);
+    run_benchmark(session, "Standard (Run 2)", 100, false);
 
     // Run Structured
-    run_benchmark(core, "Structured (Run 1)", 100, true);
-    run_benchmark(core, "Structured (Run 2)", 100, true);
+    run_benchmark(session, "Structured (Run 1)", 100, true);
+    run_benchmark(session, "Structured (Run 2)", 100, true);
 
-    liquid::ModelLoader::FreeModel(model);
+    lfg_session_free(session);
+    lfg_model_free(model);
     return 0;
 }

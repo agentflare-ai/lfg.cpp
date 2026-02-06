@@ -1,5 +1,5 @@
-#include "lfm_model.h"
-#include "lfm_inference.h"
+#include "lfg_model.h"
+#include "lfg_inference.h"
 #include <spdlog/spdlog.h>
 #include <string>
 #include <fstream>
@@ -60,8 +60,8 @@ int main(int argc, char** argv) {
 
     spdlog::info("Attempting to load {}...", bundle_path);
     
-    lfm_model_params mparams = lfm_model_default_params();
-    lfm_model* model = lfm_model_load_from_file(bundle_path.c_str(), mparams);
+    lfg_model_params mparams = lfg_model_default_params();
+    lfg_model* model = lfg_model_load_from_file(bundle_path.c_str(), mparams);
     
     if (!model) {
         spdlog::error("Failed to load Leap Bundle!");
@@ -77,7 +77,7 @@ int main(int argc, char** argv) {
     const bool snapshot_ok = snapshot_compare_or_write("test_leap_bundle", snapshot.str());
     
     // Cleanup
-    lfm_model_free(model);
+    lfg_model_free(model);
     std::remove(bundle_path.c_str());
 
     return snapshot_ok ? 0 : 1;

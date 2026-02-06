@@ -1,8 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT
 #include "doctest.h"
-#include "../inference/inference_core.h"
-#include "../inference/lfm_model.h"
-#include "../loader/model_loader.h"
+#include "../inference/lfg_api.h"
 #include "../vision/clip.h"
 #define STB_IMAGE_IMPLEMENTATION
 #include "../vision/stb_image.h"
@@ -14,22 +12,51 @@
 #include <filesystem>
 #include <sstream>
 
-using namespace liquid;
-
 std::string g_model_path;
 std::string g_mmproj_path;
 std::string g_image_path;
 std::string g_audio_path;
 std::string g_snapshot_output;
 
-std::string generate_text(liquid::InferenceCore& core, lfm_model* model, int max_tokens) {
+// Helper to convert a token to a string piece using the C API
+static std::string token_to_string(const lfg_vocab *vocab, lfg_token token) {
+    char buf[256];
+    int32_t n = lfg_token_to_piece(vocab, token, buf, sizeof(buf), 0, false);
+    if (n < 0) return "";
+    return std::string(buf, n);
+}
+
+// Helper to tokenize a string using the C API
+static std::vector<lfg_token> tokenize_str(const lfg_vocab *vocab, const std::string &text, bool add_special) {
+    std::vector<lfg_token> tokens(text.size() + 16);
+    int32_t n = lfg_tokenize(vocab, text.c_str(), text.length(), tokens.data(), tokens.size(), add_special, false);
+    if (n < 0) {
+        tokens.resize(-n);
+        n = lfg_tokenize(vocab, text.c_str(), text.length(), tokens.data(), tokens.size(), add_special, false);
+    }
+    tokens.resize(n);
+    return tokens;
+}
+
+// Helper to detokenize a vector of tokens
+static std::string detokenize(const lfg_vocab *vocab, const std::vector<lfg_token> &tokens, bool remove_special) {
+    std::vector<char> buf(tokens.size() * 16);
+    int32_t n = lfg_detokenize(vocab, tokens.data(), tokens.size(), buf.data(), buf.size(), remove_special, false);
+    if (n < 0) {
+        buf.resize(-n);
+        n = lfg_detokenize(vocab, tokens.data(), tokens.size(), buf.data(), buf.size(), remove_special, false);
+    }
+    return std::string(buf.data(), n);
+}
+
+std::string generate_text(lfg_session *session, const lfg_vocab *vocab, int max_tokens) {
     std::string output;
     for (int i = 0; i < max_tokens; ++i) {
-        core.Decode();
-        lfm_token t = core.Sample();
-        if (t == model->vocab.token_eos()) break;
-        output += model->vocab.token_to_piece(t);
-        core.IngestTokens({t}, false);
+        lfg_session_decode(session);
+        lfg_token t = lfg_session_sample(session);
+        if (t == lfg_vocab_eos(vocab)) break;
+        output += token_to_string(vocab, t);
+        lfg_session_ingest_tokens(session, &t, 1, false);
     }
     return output;
 }
@@ -87,7 +114,7 @@ int main(int argc, char** argv) {
     }
 
     context.applyCommandLine(argc, argv);
-    
+
     if (g_model_path.empty()) {
         std::cerr << "Error: --model <path> is required" << std::endl;
         return 77;
@@ -101,25 +128,27 @@ int main(int argc, char** argv) {
 }
 
 TEST_CASE("Model Capabilities Verification") {
-    lfm_backend_init();
+    lfg_backend_init();
 
     spdlog::info("Testing model: {}", g_model_path);
     std::ifstream f(g_model_path);
     REQUIRE_MESSAGE(f.good(), "Model file not found: " << g_model_path);
 
-    ModelLoader::ModelConfig load_config;
-    load_config.model_path = g_model_path;
+    lfg_model_load_config load_config = lfg_model_load_default_config();
+    load_config.model_path = g_model_path.c_str();
     load_config.n_gpu_layers = 0; // Use CPU for broad compatibility
 
-    lfm_model* model = ModelLoader::LoadModel(load_config);
+    lfg_model* model = lfg_load_model(&load_config);
     REQUIRE_MESSAGE(model != nullptr, "Failed to load model: " << g_model_path);
 
-    InferenceCore::Config config;
+    const lfg_vocab *vocab = lfg_model_get_vocab(model);
+
+    lfg_session_config config = lfg_session_default_config();
     config.n_ctx = 2048;
     config.sampling.temp = 0.0f; // Deterministic for testing
     config.sampling.seed = 12345;
     config.enable_healing = true;
-    InferenceCore core(model, config);
+    lfg_session *session = lfg_session_create(model, &config);
 
     // Vision/Audio setup if requested
     if (!g_mmproj_path.empty()) {
@@ -145,11 +174,12 @@ TEST_CASE("Model Capabilities Verification") {
                     int n_embd_vision = clip_n_mmproj_embd(ctx_clip);
                     clip_image_f32* img_f32 = clip_image_f32_get_img(img_res, 0);
                     int n_vision_tokens = clip_n_output_tokens(ctx_clip, img_f32);
-                    
+
                     std::vector<float> vision_embeddings(n_vision_tokens * n_embd_vision);
                     if (clip_image_encode(ctx_clip, 4, img_f32, vision_embeddings.data())) {
                         spdlog::info("Ingesting vision embeddings...");
-                        core.IngestEmbeddings(vision_embeddings, n_vision_tokens);
+                        // TODO: No C API for IngestEmbeddings yet -- needs lfg_session_ingest_embeddings
+                        spdlog::warn("IngestEmbeddings not available in C API, skipping vision embedding ingestion");
                     }
                 }
                 clip_image_f32_batch_free(img_res);
@@ -161,7 +191,7 @@ TEST_CASE("Model Capabilities Verification") {
             // For now, if we have --audio, we just use a dummy mel spectrogram if it's an audio model
             if (clip_has_audio_encoder(ctx_clip)) {
                 spdlog::info("Processing audio (dummy): {}", g_audio_path);
-                
+
                 auto* audio_batch = clip_image_f32_batch_init();
                 // Get n_mel from model
                 int n_mel = clip_get_audio_num_mel_bins(ctx_clip);
@@ -169,19 +199,20 @@ TEST_CASE("Model Capabilities Verification") {
                 int n_frames = 3000;
                 spdlog::info("Using n_mel = {}, n_frames = {}", n_mel, n_frames);
                 std::vector<float> dummy_mel(n_mel * n_frames, 0.0f);
-                
+
                 clip_image_f32_batch_add_mel(audio_batch, n_mel, n_frames, dummy_mel.data());
-                
+
                 int n_embd_audio = clip_n_mmproj_embd(ctx_clip);
                 clip_image_f32* audio_f32 = clip_image_f32_get_img(audio_batch, 0);
                 int n_audio_tokens = clip_n_output_tokens(ctx_clip, audio_f32);
-                
+
                 std::vector<float> audio_embeddings(n_audio_tokens * n_embd_audio);
                 if (clip_image_batch_encode(ctx_clip, 4, audio_batch, audio_embeddings.data())) {
                     spdlog::info("Ingesting audio embeddings ({} tokens)...", n_audio_tokens);
-                    core.IngestEmbeddings(audio_embeddings, n_audio_tokens);
+                    // TODO: No C API for IngestEmbeddings yet -- needs lfg_session_ingest_embeddings
+                    spdlog::warn("IngestEmbeddings not available in C API, skipping audio embedding ingestion");
                 }
-                
+
                 clip_image_f32_batch_free(audio_batch);
             } else {
                 spdlog::error("Projector does not support audio");
@@ -192,30 +223,30 @@ TEST_CASE("Model Capabilities Verification") {
 
     SUBCASE("Basic Text Generation") {
         std::string prompt = "Hello, how are you?";
-        auto tokens = model->vocab.tokenize(prompt, true);
+        auto tokens = tokenize_str(vocab, prompt, true);
         REQUIRE(!tokens.empty());
-        
-        core.IngestTokens(tokens);
-        core.Decode();
-        
-        lfm_token t = core.Sample();
-        CHECK(t != LFM_TOKEN_NULL);
-        std::string piece = model->vocab.token_to_piece(t);
+
+        lfg_session_ingest_tokens(session, tokens.data(), tokens.size(), true);
+        lfg_session_decode(session);
+
+        lfg_token t = lfg_session_sample(session);
+        CHECK(t != LFG_TOKEN_NULL);
+        std::string piece = token_to_string(vocab, t);
         spdlog::info("Generated token: '{}'", piece);
         CHECK(!piece.empty());
 
         g_snapshot_output += "[basic]\n";
         g_snapshot_output += "token=" + piece + "\n";
-        g_snapshot_output += "tail=" + generate_text(core, model, 8) + "\n";
+        g_snapshot_output += "tail=" + generate_text(session, vocab, 8) + "\n";
     }
 
     SUBCASE("Structured Decoding (JSON)") {
-        core.Reset();
+        lfg_session_reset(session);
         std::string prompt = "Answer with a JSON object: ";
-        auto tokens = model->vocab.tokenize(prompt, true);
-        core.IngestTokens(tokens);
+        auto tokens = tokenize_str(vocab, prompt, true);
+        lfg_session_ingest_tokens(session, tokens.data(), tokens.size(), true);
 
-        std::string schema = R"({ 
+        std::string schema = R"({
             "type": "object",
             "properties": {
                 "answer": { "type": "string" },
@@ -223,19 +254,19 @@ TEST_CASE("Model Capabilities Verification") {
             },
             "required": ["answer", "confidence"]
         })";
-        
-        core.ConfigureStructuredDecoding(schema);
-        
+
+        lfg_session_configure_structured(session, schema.c_str(), "root");
+
         std::string output;
         for (int i = 0; i < 50; ++i) {
-            core.Decode();
-            lfm_token t = core.Sample();
-            if (t == model->vocab.token_eos()) break;
-            output += model->vocab.token_to_piece(t);
-            core.IngestTokens({t}, false);
+            lfg_session_decode(session);
+            lfg_token t = lfg_session_sample(session);
+            if (t == lfg_vocab_eos(vocab)) break;
+            output += token_to_string(vocab, t);
+            lfg_session_ingest_tokens(session, &t, 1, false);
             if (output.find('}') != std::string::npos) break;
         }
-        
+
         spdlog::info("Structured output: {}", output);
         CHECK(output.find("\"answer\"") != std::string::npos);
         // We relax the confidence check as small models might struggle with strict field ordering or hallucinate
@@ -245,52 +276,56 @@ TEST_CASE("Model Capabilities Verification") {
     }
 
     SUBCASE("Checkpointing and Determinism") {
-        core.Reset();
+        lfg_session_reset(session);
         std::string prompt = "The capital of France is";
-        core.IngestTokens(model->vocab.tokenize(prompt, true));
-        core.Decode();
-        
-        auto cp = core.CreateCheckpoint();
-        
+        auto prompt_tokens = tokenize_str(vocab, prompt, true);
+        lfg_session_ingest_tokens(session, prompt_tokens.data(), prompt_tokens.size(), true);
+        lfg_session_decode(session);
+
+        lfg_checkpoint *cp = lfg_session_create_checkpoint(session);
+
         // Generate 3 tokens
-        std::vector<lfm_token> path1;
+        std::vector<lfg_token> path1;
         for (int i = 0; i < 3; ++i) {
-            lfm_token t = core.Sample();
+            lfg_token t = lfg_session_sample(session);
             path1.push_back(t);
-            core.IngestTokens({t});
-            core.Decode();
+            lfg_session_ingest_tokens(session, &t, 1, true);
+            lfg_session_decode(session);
         }
-        
+
         // Restore
-        REQUIRE(core.RestoreCheckpoint(cp));
-        
+        REQUIRE(lfg_session_restore_checkpoint(session, cp));
+
         // Generate 3 tokens again
-        std::vector<lfm_token> path2;
+        std::vector<lfg_token> path2;
         for (int i = 0; i < 3; ++i) {
-            lfm_token t = core.Sample();
+            lfg_token t = lfg_session_sample(session);
             path2.push_back(t);
-            core.IngestTokens({t});
-            core.Decode();
+            lfg_session_ingest_tokens(session, &t, 1, true);
+            lfg_session_decode(session);
         }
-        
+
         CHECK(path1 == path2);
 
         g_snapshot_output += "[checkpoint]\n";
-        g_snapshot_output += "path1=" + model->vocab.detokenize(path1, false) + "\n";
-        g_snapshot_output += "path2=" + model->vocab.detokenize(path2, false) + "\n";
+        g_snapshot_output += "path1=" + detokenize(vocab, path1, false) + "\n";
+        g_snapshot_output += "path2=" + detokenize(vocab, path2, false) + "\n";
+
+        lfg_checkpoint_free(cp);
     }
 
     SUBCASE("Token Healing") {
-        core.Reset();
+        lfg_session_reset(session);
         std::string prompt = "The quick brown fox jumps over the laz";
-        core.IngestTokens(model->vocab.tokenize(prompt, true));
-        
-        bool healed = core.HealLastToken();
+        auto tokens = tokenize_str(vocab, prompt, true);
+        lfg_session_ingest_tokens(session, tokens.data(), tokens.size(), true);
+
+        bool healed = lfg_session_heal_last_token(session);
         spdlog::info("Healed: {}", healed ? "yes" : "no");
-        
-        core.Decode();
-        lfm_token t = core.Sample();
-        std::string piece = model->vocab.token_to_piece(t);
+
+        lfg_session_decode(session);
+        lfg_token t = lfg_session_sample(session);
+        std::string piece = token_to_string(vocab, t);
         spdlog::info("Healed next piece: '{}'", piece);
         CHECK(!piece.empty());
 
@@ -300,12 +335,12 @@ TEST_CASE("Model Capabilities Verification") {
     }
 
     SUBCASE("Tool Calling (Schema-based)") {
-        core.Reset();
+        lfg_session_reset(session);
         std::string prompt = "Output a tool call for get_stock_price with symbol AAPL: ";
-        auto tokens = model->vocab.tokenize(prompt, true);
-        core.IngestTokens(tokens);
+        auto tokens = tokenize_str(vocab, prompt, true);
+        lfg_session_ingest_tokens(session, tokens.data(), tokens.size(), true);
 
-        std::string tool_schema = R"({ 
+        std::string tool_schema = R"({
             "type": "object",
             "properties": {
                 "function": { "const": "get_stock_price" },
@@ -319,21 +354,21 @@ TEST_CASE("Model Capabilities Verification") {
             },
             "required": ["function", "parameters"]
         })";
-        
-        core.ConfigureStructuredDecoding(tool_schema);
-        
+
+        lfg_session_configure_structured(session, tool_schema.c_str(), "root");
+
         std::string output;
         for (int i = 0; i < 100; ++i) {
-            core.Decode();
-            lfm_token t = core.Sample();
-            if (t == model->vocab.token_eos()) break;
-            output += model->vocab.token_to_piece(t);
-            core.IngestTokens({t}, false);
+            lfg_session_decode(session);
+            lfg_token t = lfg_session_sample(session);
+            if (t == lfg_vocab_eos(vocab)) break;
+            output += token_to_string(vocab, t);
+            lfg_session_ingest_tokens(session, &t, 1, false);
             int braces = 0;
             for(char c : output) if(c == '}') braces++;
             if (braces >= 2) break;
         }
-        
+
         spdlog::info("Tool call output: {}", output);
         CHECK(output.find("get_stock_price") != std::string::npos);
 
@@ -341,5 +376,6 @@ TEST_CASE("Model Capabilities Verification") {
         g_snapshot_output += "json=" + output + "\n";
     }
 
-    lfm_model_free(model);
+    lfg_session_free(session);
+    lfg_model_free(model);
 }

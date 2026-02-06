@@ -1,13 +1,10 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest.h"
-#include "../inference/inference_core.h"
-#include "../loader/model_loader.h"
+#include "../inference/lfg_api.h"
 #include <fstream>
 
-using namespace liquid;
-
 TEST_CASE("Structured decoding does not double-accept sampled tokens") {
-    lfm_backend_init();
+    lfg_backend_init();
 
     const std::string model_path = "models/lfm2-350M.gguf";
     std::ifstream f(model_path);
@@ -16,36 +13,37 @@ TEST_CASE("Structured decoding does not double-accept sampled tokens") {
         return;
     }
 
-    ModelLoader::ModelConfig load_config;
-    load_config.model_path = model_path;
+    lfg_model_load_config load_config = lfg_model_load_default_config();
+    load_config.model_path = model_path.c_str();
     load_config.n_gpu_layers = 0;
 
-    lfm_model * model = ModelLoader::LoadModel(load_config);
+    lfg_model * model = lfg_load_model(&load_config);
     REQUIRE(model != nullptr);
 
-    InferenceCore::Config config;
+    lfg_session_config config = lfg_session_default_config();
     config.n_ctx = 512;
     config.sampling.temp = 0.0f;
 
-    InferenceCore core(model, config);
+    lfg_session * session = lfg_session_create(model, &config);
 
     const std::string grammar = R"GBNF(
 root ::= "ab"
 )GBNF";
 
-    core.ConfigureStructuredDecoding(grammar);
+    lfg_session_configure_structured(session, grammar.c_str(), "root");
 
-    const auto * vocab = lfm_model_get_vocab(model);
-    const lfm_token bos = lfm_vocab_bos(vocab);
+    const auto * vocab = lfg_model_get_vocab(model);
+    const lfg_token bos = lfg_vocab_bos(vocab);
 
-    CHECK(core.IngestTokens({bos}, false));
+    CHECK(lfg_session_ingest_tokens(session, &bos, 1, false));
 
-    core.Decode();
-    lfm_token token = core.Sample();
+    lfg_session_decode(session);
+    lfg_token token = lfg_session_sample(session);
 
     bool ingest_ok = false;
-    CHECK_NOTHROW(ingest_ok = core.IngestTokens({token}));
+    CHECK_NOTHROW(ingest_ok = lfg_session_ingest_tokens(session, &token, 1, true));
     CHECK(ingest_ok);
 
-    lfm_model_free(model);
+    lfg_session_free(session);
+    lfg_model_free(model);
 }
