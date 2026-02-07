@@ -1930,14 +1930,14 @@ LFG_API lfg_generate_config lfg_generate_default_config(void) {
 }
 
 LFG_API lfg_generate_result lfg_session_generate(
-    lfg_session * session, const lfg_generate_config * config)
+    lfg_session * session, lfg_generate_config config)
 {
     lfg_generate_result result{};
     if (!session) return result;
 
     const lfg_vocab *vocab = lfg_model_get_vocab(session->model);
-    int32_t max_tokens = config && config->max_tokens > 0
-        ? config->max_tokens
+    int32_t max_tokens = config.max_tokens > 0
+        ? config.max_tokens
         : (session->config.max_tokens > 0 ? session->config.max_tokens : 4096);
 
     char piece_buf[256];
@@ -1945,7 +1945,7 @@ LFG_API lfg_generate_result lfg_session_generate(
 
     // Pre-allocate embedding buffer for entropy callbacks (zero-alloc in hot path)
     float *embd_buf = nullptr;
-    if (config && config->entropy_cb && session->entropy_active && session->entropy_n_embd > 0) {
+    if (config.entropy_cb && session->entropy_active && session->entropy_n_embd > 0) {
         embd_buf = (float *)alloca(session->entropy_n_embd * sizeof(float));
     }
 
@@ -1960,11 +1960,11 @@ LFG_API lfg_generate_result lfg_session_generate(
         }
 
         // Entropy callback — pop with embedding, let callback pick text to inject.
-        if (config && config->entropy_cb && session->entropy_active) {
+        if (config.entropy_cb && session->entropy_active) {
             lfg_entropy_event ev;
             if (lfg_session_entropy_pop(session, &ev, embd_buf, session->entropy_n_embd)) {
                 const float *embd_ptr = ev.n_embd > 0 ? embd_buf : nullptr;
-                const char *inject = config->entropy_cb(&ev, embd_ptr, config->entropy_cb_data);
+                const char *inject = config.entropy_cb(&ev, embd_ptr, config.entropy_cb_data);
                 if (inject) {
                     // Rewind to checkpoint, tokenize injected text, ingest, continue
                     if (lfg_session_rewind(session, ev.checkpoint_id)) {
@@ -2000,10 +2000,10 @@ LFG_API lfg_generate_result lfg_session_generate(
         result.n_tokens = i + 1;
 
         // Token callback (for streaming)
-        if (config && config->token_cb) {
+        if (config.token_cb) {
             int32_t n = lfg_token_to_piece(vocab, tok, piece_buf, sizeof(piece_buf), 0, false);
             if (n < 0) n = 0;
-            lfg_generate_action action = config->token_cb(tok, piece_buf, n, config->token_cb_data);
+            lfg_generate_action action = config.token_cb(tok, piece_buf, n, config.token_cb_data);
             if (action == LFG_GENERATE_STOP) {
                 result.stop_reason = LFG_STOP_CALLBACK;
                 stopped = true;
@@ -2025,7 +2025,7 @@ LFG_API lfg_generate_result lfg_session_prompt_generate(
     lfg_session * session,
     const char * prompt, int32_t prompt_len,
     bool add_bos,
-    const lfg_generate_config * config)
+    lfg_generate_config config)
 {
     lfg_generate_result result{};
     if (!session || !prompt || prompt_len <= 0) return result;
@@ -2056,7 +2056,7 @@ LFG_API lfg_generate_result lfg_session_prompt_generate(
 LFG_API lfg_generate_result lfg_session_chat_generate(
     lfg_session * session,
     const lfg_chat_message * messages, size_t n_messages,
-    const lfg_generate_config * config)
+    lfg_generate_config config)
 {
     lfg_generate_result result{};
     if (!session || !messages || n_messages == 0) return result;

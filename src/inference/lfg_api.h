@@ -225,7 +225,7 @@ LFG_API lfg_generate_config lfg_generate_default_config(void);
 // Generate from current session state (prompt already ingested).
 // Runs decode+sample+ingest loop on C side. Returns when stopped.
 LFG_API lfg_generate_result lfg_session_generate(
-    lfg_session * session, const lfg_generate_config * config);
+    lfg_session * session, lfg_generate_config config);
 
 // Prompt-level: tokenize raw text, ingest, generate.
 // One FFI call for instruction/completion-style generation.
@@ -234,14 +234,14 @@ LFG_API lfg_generate_result lfg_session_prompt_generate(
     lfg_session * session,
     const char * prompt, int32_t prompt_len,
     bool add_bos,
-    const lfg_generate_config * config);
+    lfg_generate_config config);
 
 // Chat-level: format messages with model's chat template, tokenize, ingest, generate.
 // One FFI call for the entire chat->generation pipeline.
 LFG_API lfg_generate_result lfg_session_chat_generate(
     lfg_session * session,
     const lfg_chat_message * messages, size_t n_messages,
-    const lfg_generate_config * config);
+    lfg_generate_config config);
 
 // --- Model Loader C API (replaces liquid::ModelLoader) ---
 

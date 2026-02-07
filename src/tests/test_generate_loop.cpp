@@ -72,7 +72,7 @@ TEST_CASE("lfg_generate_default_config - zeroed") {
 TEST_CASE("lfg_session_generate - null session returns zero result") {
     lfg_generate_config gc = lfg_generate_default_config();
     gc.max_tokens = 10;
-    lfg_generate_result r = lfg_session_generate(nullptr, &gc);
+    lfg_generate_result r = lfg_session_generate(nullptr, gc);
     CHECK(r.n_tokens == 0);
     CHECK(r.n_retrievals == 0);
 }
@@ -88,7 +88,7 @@ TEST_CASE("lfg_session_generate - basic generation with max_tokens") {
 
     lfg_generate_config gc = lfg_generate_default_config();
     gc.max_tokens = 10;
-    lfg_generate_result r = lfg_session_generate(env.session, &gc);
+    lfg_generate_result r = lfg_session_generate(env.session, gc);
 
     MESSAGE("Generated ", r.n_tokens, " tokens, stop_reason=", r.stop_reason);
     CHECK(r.n_tokens > 0);
@@ -124,7 +124,7 @@ TEST_CASE("lfg_session_generate - token callback receives pieces") {
     };
     gc.token_cb_data = &state;
 
-    lfg_generate_result r = lfg_session_generate(env.session, &gc);
+    lfg_generate_result r = lfg_session_generate(env.session, gc);
 
     MESSAGE("Streamed ", state.count, " tokens: '", state.text.substr(0, 100), "'");
     CHECK(state.count == r.n_tokens);
@@ -154,7 +154,7 @@ TEST_CASE("lfg_session_generate - callback can stop generation") {
     };
     gc.token_cb_data = &stop_after;
 
-    lfg_generate_result r = lfg_session_generate(env.session, &gc);
+    lfg_generate_result r = lfg_session_generate(env.session, gc);
 
     MESSAGE("Stopped after ", r.n_tokens, " tokens");
     CHECK(r.n_tokens == 5);
@@ -191,7 +191,7 @@ TEST_CASE("lfg_session_generate - uses session max_tokens when config is 0") {
 
     // config max_tokens = 0 → should fall back to session config (5)
     lfg_generate_config gc = lfg_generate_default_config();
-    lfg_generate_result r = lfg_session_generate(session, &gc);
+    lfg_generate_result r = lfg_session_generate(session, gc);
 
     MESSAGE("Generated ", r.n_tokens, " tokens with session max_tokens=5");
     // session's sample() also enforces max_tokens by returning EOS, so the
@@ -225,7 +225,7 @@ TEST_CASE("lfg_session_generate - stop sequences work through generate") {
 
     lfg_generate_config gc = lfg_generate_default_config();
     gc.max_tokens = 200;
-    lfg_generate_result r = lfg_session_generate(env.session, &gc);
+    lfg_generate_result r = lfg_session_generate(env.session, gc);
 
     MESSAGE("Stopped after ", r.n_tokens, " tokens, reason=", r.stop_reason);
     // Stop sequence triggers EOS from sample(), so stop_reason should be EOS.
@@ -236,7 +236,7 @@ TEST_CASE("lfg_session_generate - stop sequences work through generate") {
     teardown(&env);
 }
 
-TEST_CASE("lfg_session_generate - no callbacks, null config") {
+TEST_CASE("lfg_session_generate - default config uses session max_tokens") {
     lfg_model_load_config lcfg = lfg_model_load_default_config();
     lcfg.model_path = get_model_path();
     lfg_model *model = lfg_load_model(&lcfg);
@@ -262,10 +262,10 @@ TEST_CASE("lfg_session_generate - no callbacks, null config") {
     tokens.resize(n);
     REQUIRE(lfg_session_ingest_tokens(session, tokens.data(), tokens.size(), true));
 
-    // Pass NULL config — should use session defaults
-    lfg_generate_result r = lfg_session_generate(session, nullptr);
+    // Pass default config (max_tokens=0) — should use session max_tokens (8)
+    lfg_generate_result r = lfg_session_generate(session, lfg_generate_default_config());
 
-    MESSAGE("Generated ", r.n_tokens, " tokens with null config");
+    MESSAGE("Generated ", r.n_tokens, " tokens with default config");
     CHECK(r.n_tokens > 0);
 
     lfg_session_free(session);
@@ -276,11 +276,11 @@ TEST_CASE("lfg_session_prompt_generate - null safety") {
     lfg_generate_config gc = lfg_generate_default_config();
     gc.max_tokens = 10;
 
-    lfg_generate_result r = lfg_session_prompt_generate(nullptr, "hi", 2, true, &gc);
+    lfg_generate_result r = lfg_session_prompt_generate(nullptr, "hi", 2, true, gc);
     CHECK(r.n_tokens == 0);
 
     // null prompt
-    r = lfg_session_prompt_generate(nullptr, nullptr, 0, true, &gc);
+    r = lfg_session_prompt_generate(nullptr, nullptr, 0, true, gc);
     CHECK(r.n_tokens == 0);
 }
 
@@ -308,7 +308,7 @@ TEST_CASE("lfg_session_prompt_generate - basic completion") {
     gc.token_cb_data = &state;
 
     lfg_generate_result r = lfg_session_prompt_generate(
-        env.session, prompt, (int32_t)strlen(prompt), true, &gc);
+        env.session, prompt, (int32_t)strlen(prompt), true, gc);
 
     MESSAGE("Prompt generated ", r.n_tokens, " tokens: '", state.text.substr(0, 100), "'");
     CHECK(r.n_tokens > 0);
@@ -340,7 +340,7 @@ TEST_CASE("lfg_session_prompt_generate - parity with manual tokenize+ingest+gene
         return LFG_GENERATE_CONTINUE;
     };
     gc.token_cb_data = &manual_output;
-    lfg_session_generate(env.session, &gc);
+    lfg_session_generate(env.session, gc);
 
     // --- Reset and use prompt_generate ---
     lfg_session_reset(env.session);
@@ -348,7 +348,7 @@ TEST_CASE("lfg_session_prompt_generate - parity with manual tokenize+ingest+gene
     std::string prompt_output;
     gc.token_cb_data = &prompt_output;
     lfg_session_prompt_generate(
-        env.session, prompt, (int32_t)strlen(prompt), true, &gc);
+        env.session, prompt, (int32_t)strlen(prompt), true, gc);
 
     MESSAGE("Manual:  '", manual_output, "'");
     MESSAGE("Prompt:  '", prompt_output, "'");
@@ -361,7 +361,7 @@ TEST_CASE("lfg_session_chat_generate - null session/messages") {
     lfg_generate_config gc = lfg_generate_default_config();
     gc.max_tokens = 10;
 
-    lfg_generate_result r = lfg_session_chat_generate(nullptr, nullptr, 0, &gc);
+    lfg_generate_result r = lfg_session_chat_generate(nullptr, nullptr, 0, gc);
     CHECK(r.n_tokens == 0);
 }
 
@@ -390,7 +390,7 @@ TEST_CASE("lfg_session_chat_generate - full chat pipeline") {
     };
     gc.token_cb_data = &state;
 
-    lfg_generate_result r = lfg_session_chat_generate(env.session, msgs, 1, &gc);
+    lfg_generate_result r = lfg_session_chat_generate(env.session, msgs, 1, gc);
 
     MESSAGE("Chat generated ", r.n_tokens, " tokens: '", state.text.substr(0, 200), "'");
     CHECK(r.n_tokens > 0);
@@ -439,7 +439,7 @@ TEST_CASE("lfg_session_generate - parity with manual loop") {
     };
     gc.token_cb_data = &gen_output;
 
-    lfg_generate_result r = lfg_session_generate(env.session, &gc);
+    lfg_generate_result r = lfg_session_generate(env.session, gc);
 
     MESSAGE("Manual: '", manual_output, "'");
     MESSAGE("Generate: '", gen_output, "'");
