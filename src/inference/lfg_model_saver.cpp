@@ -11,7 +11,7 @@
 #include <stdexcept>
 #include <string>
 
-lfg_model_saver::lfg_model_saver(const struct lfg_model & model) : model(model), llm_kv(model.arch) {
+lfg_model_saver::lfg_model_saver(const struct lfg_model & model) : model(model), lfg_kv_enum(model.arch) {
     gguf_ctx = gguf_init_empty();
 }
 
@@ -19,28 +19,28 @@ lfg_model_saver::~lfg_model_saver() {
     gguf_free(gguf_ctx);
 }
 
-void lfg_model_saver::add_kv(const enum llm_kv key, const uint32_t value) {
-    gguf_set_val_u32(gguf_ctx, llm_kv(key).c_str(), value);
+void lfg_model_saver::add_kv(const enum lfg_kv_enum key, const uint32_t value) {
+    gguf_set_val_u32(gguf_ctx, lfg_kv_enum(key).c_str(), value);
 }
 
-void lfg_model_saver::add_kv(const enum llm_kv key, const int32_t value) {
-    gguf_set_val_i32(gguf_ctx, llm_kv(key).c_str(), value);
+void lfg_model_saver::add_kv(const enum lfg_kv_enum key, const int32_t value) {
+    gguf_set_val_i32(gguf_ctx, lfg_kv_enum(key).c_str(), value);
 }
 
-void lfg_model_saver::add_kv(const enum llm_kv key, const float value) {
-    gguf_set_val_f32(gguf_ctx, llm_kv(key).c_str(), value);
+void lfg_model_saver::add_kv(const enum lfg_kv_enum key, const float value) {
+    gguf_set_val_f32(gguf_ctx, lfg_kv_enum(key).c_str(), value);
 }
 
-void lfg_model_saver::add_kv(const enum llm_kv key, const bool value) {
-    gguf_set_val_bool(gguf_ctx, llm_kv(key).c_str(), value);
+void lfg_model_saver::add_kv(const enum lfg_kv_enum key, const bool value) {
+    gguf_set_val_bool(gguf_ctx, lfg_kv_enum(key).c_str(), value);
 }
 
-void lfg_model_saver::add_kv(const enum llm_kv key, const char * value) {
-    gguf_set_val_str(gguf_ctx, llm_kv(key).c_str(), value);
+void lfg_model_saver::add_kv(const enum lfg_kv_enum key, const char * value) {
+    gguf_set_val_str(gguf_ctx, lfg_kv_enum(key).c_str(), value);
 }
 
 [[noreturn]]
-void lfg_model_saver::add_kv(const enum llm_kv key, const char value) {
+void lfg_model_saver::add_kv(const enum lfg_kv_enum key, const char value) {
     GGML_UNUSED(key);
     GGML_UNUSED(value);
     lfg_set_last_error(LFG_ERROR_INTERNAL, "%s: invalid char overload", __func__);
@@ -48,7 +48,7 @@ void lfg_model_saver::add_kv(const enum llm_kv key, const char value) {
 }
 
 template <typename Container>
-void lfg_model_saver::add_kv(const enum llm_kv key, const Container & value, const bool per_layer) {
+void lfg_model_saver::add_kv(const enum lfg_kv_enum key, const Container & value, const bool per_layer) {
     const size_t n_values = per_layer ? size_t(model.hparams.n_layer) : value.size();
     GGML_ASSERT(n_values <= value.size());
 
@@ -71,29 +71,29 @@ void lfg_model_saver::add_kv(const enum llm_kv key, const Container & value, con
     }
 
     if (std::is_same<typename Container::value_type, uint8_t>::value) {
-        gguf_set_arr_data(gguf_ctx, llm_kv(key).c_str(), GGUF_TYPE_UINT8, value.data(), n_values);
+        gguf_set_arr_data(gguf_ctx, lfg_kv_enum(key).c_str(), GGUF_TYPE_UINT8, value.data(), n_values);
     } else if (std::is_same<typename Container::value_type, int8_t>::value) {
-        gguf_set_arr_data(gguf_ctx, llm_kv(key).c_str(), GGUF_TYPE_INT8, value.data(), n_values);
+        gguf_set_arr_data(gguf_ctx, lfg_kv_enum(key).c_str(), GGUF_TYPE_INT8, value.data(), n_values);
     } else if (std::is_same<typename Container::value_type, uint32_t>::value) {
-        gguf_set_arr_data(gguf_ctx, llm_kv(key).c_str(), GGUF_TYPE_UINT32, value.data(), n_values);
+        gguf_set_arr_data(gguf_ctx, lfg_kv_enum(key).c_str(), GGUF_TYPE_UINT32, value.data(), n_values);
     } else if (std::is_same<typename Container::value_type, int32_t>::value) {
-        gguf_set_arr_data(gguf_ctx, llm_kv(key).c_str(), GGUF_TYPE_INT32, value.data(), n_values);
+        gguf_set_arr_data(gguf_ctx, lfg_kv_enum(key).c_str(), GGUF_TYPE_INT32, value.data(), n_values);
     } else if (std::is_same<typename Container::value_type, float>::value) {
-        gguf_set_arr_data(gguf_ctx, llm_kv(key).c_str(), GGUF_TYPE_FLOAT32, value.data(), n_values);
+        gguf_set_arr_data(gguf_ctx, lfg_kv_enum(key).c_str(), GGUF_TYPE_FLOAT32, value.data(), n_values);
     } else if (std::is_same<Container, std::string>::value) {
-        gguf_set_val_str(gguf_ctx, llm_kv(key).c_str(), reinterpret_cast<const char *>(value.data()));
+        gguf_set_val_str(gguf_ctx, lfg_kv_enum(key).c_str(), reinterpret_cast<const char *>(value.data()));
     } else {
         lfg_set_last_error(LFG_ERROR_INTERNAL, "%s: unsupported kv container type", __func__);
         throw std::runtime_error("unsupported kv container type");
     }
 }
 
-void lfg_model_saver::add_kv(const enum llm_kv key, const std::vector<std::string> & value) {
+void lfg_model_saver::add_kv(const enum lfg_kv_enum key, const std::vector<std::string> & value) {
     std::vector<const char *> tmp(value.size());
     for (size_t i = 0; i < value.size(); ++i) {
         tmp[i] = value[i].c_str();
     }
-    gguf_set_arr_str(gguf_ctx, llm_kv(key).c_str(), tmp.data(), tmp.size());
+    gguf_set_arr_str(gguf_ctx, lfg_kv_enum(key).c_str(), tmp.data(), tmp.size());
 }
 
 void lfg_model_saver::add_tensor(const struct ggml_tensor * tensor) {
@@ -134,128 +134,128 @@ void lfg_model_saver::add_kv_from_model() {
         }
     }
 
-    // add_kv(LLM_KV_GENERAL_TYPE,                      ???);
-    add_kv(LLM_KV_GENERAL_ARCHITECTURE,              model.arch_name());
-    // add_kv(LLM_KV_GENERAL_QUANTIZATION_VERSION,      ???);
-    // add_kv(LLM_KV_GENERAL_ALIGNMENT,                 ???);
-    add_kv(LLM_KV_GENERAL_NAME,                      model.name);
-    // add_kv(LLM_KV_GENERAL_AUTHOR,                    ???);
-    // add_kv(LLM_KV_GENERAL_VERSION,                   ???);
-    // add_kv(LLM_KV_GENERAL_URL,                       ???);
-    // add_kv(LLM_KV_GENERAL_DESCRIPTION,               ???);
-    // add_kv(LLM_KV_GENERAL_LICENSE,                   ???);
-    // add_kv(LLM_KV_GENERAL_SOURCE_URL,                ???);
-    // add_kv(LLM_KV_GENERAL_SOURCE_HF_REPO,            ???);
+    // add_kv(LFG_KV_GENERAL_TYPE,                      ???);
+    add_kv(LFG_KV_GENERAL_ARCHITECTURE,              model.arch_name());
+    // add_kv(LFG_KV_GENERAL_QUANTIZATION_VERSION,      ???);
+    // add_kv(LFG_KV_GENERAL_ALIGNMENT,                 ???);
+    add_kv(LFG_KV_GENERAL_NAME,                      model.name);
+    // add_kv(LFG_KV_GENERAL_AUTHOR,                    ???);
+    // add_kv(LFG_KV_GENERAL_VERSION,                   ???);
+    // add_kv(LFG_KV_GENERAL_URL,                       ???);
+    // add_kv(LFG_KV_GENERAL_DESCRIPTION,               ???);
+    // add_kv(LFG_KV_GENERAL_LICENSE,                   ???);
+    // add_kv(LFG_KV_GENERAL_SOURCE_URL,                ???);
+    // add_kv(LFG_KV_GENERAL_SOURCE_HF_REPO,            ???);
 
-    add_kv(LLM_KV_VOCAB_SIZE,                        vocab.n_tokens());
-    add_kv(LLM_KV_CONTEXT_LENGTH,                    hparams.n_ctx_train);
-    add_kv(LLM_KV_EMBEDDING_LENGTH,                  hparams.n_embd);
+    add_kv(LFG_KV_VOCAB_SIZE,                        vocab.n_tokens());
+    add_kv(LFG_KV_CONTEXT_LENGTH,                    hparams.n_ctx_train);
+    add_kv(LFG_KV_EMBEDDING_LENGTH,                  hparams.n_embd);
     if (hparams.n_embd_out > 0) {
-        add_kv(LLM_KV_EMBEDDING_LENGTH_OUT,          hparams.n_embd_out);
+        add_kv(LFG_KV_EMBEDDING_LENGTH_OUT,          hparams.n_embd_out);
     }
-    add_kv(LLM_KV_BLOCK_COUNT,                       hparams.n_layer);
-    add_kv(LLM_KV_LEADING_DENSE_BLOCK_COUNT,         hparams.n_layer_dense_lead);
-    add_kv(LLM_KV_FEED_FORWARD_LENGTH,               hparams.n_ff_arr, true);
-    add_kv(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp);
-    add_kv(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_exp);
-    add_kv(LLM_KV_USE_PARALLEL_RESIDUAL,             hparams.use_par_res);
-    // add_kv(LLM_KV_TENSOR_DATA_LAYOUT,                ???);
-    add_kv(LLM_KV_EXPERT_COUNT,                      hparams.n_expert);
-    add_kv(LLM_KV_EXPERT_USED_COUNT,                 hparams.n_expert_used);
-    add_kv(LLM_KV_EXPERT_SHARED_COUNT,               hparams.n_expert_shared);
-    add_kv(LLM_KV_EXPERT_WEIGHTS_SCALE,              hparams.expert_weights_scale);
-    add_kv(LLM_KV_POOLING_TYPE,                      uint32_t(hparams.pooling_type));
-    add_kv(LLM_KV_LOGIT_SCALE,                       hparams.f_logit_scale);
-    add_kv(LLM_KV_DECODER_START_TOKEN_ID,            hparams.dec_start_token_id);
-    add_kv(LLM_KV_ATTN_LOGIT_SOFTCAPPING,            hparams.f_attn_logit_softcapping);
-    add_kv(LLM_KV_FINAL_LOGIT_SOFTCAPPING,           hparams.f_final_logit_softcapping);
-    add_kv(LLM_KV_SWIN_NORM,                         hparams.swin_norm);
-    add_kv(LLM_KV_RESCALE_EVERY_N_LAYERS,            hparams.rescale_every_n_layers);
-    add_kv(LLM_KV_TIME_MIX_EXTRA_DIM,                hparams.time_mix_extra_dim);
-    add_kv(LLM_KV_TIME_DECAY_EXTRA_DIM,              hparams.time_decay_extra_dim);
-    add_kv(LLM_KV_RESIDUAL_SCALE,                    hparams.f_residual_scale);
-    add_kv(LLM_KV_EMBEDDING_SCALE,                   hparams.f_embedding_scale);
+    add_kv(LFG_KV_BLOCK_COUNT,                       hparams.n_layer);
+    add_kv(LFG_KV_LEADING_DENSE_BLOCK_COUNT,         hparams.n_layer_dense_lead);
+    add_kv(LFG_KV_FEED_FORWARD_LENGTH,               hparams.n_ff_arr, true);
+    add_kv(LFG_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp);
+    add_kv(LFG_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_exp);
+    add_kv(LFG_KV_USE_PARALLEL_RESIDUAL,             hparams.use_par_res);
+    // add_kv(LFG_KV_TENSOR_DATA_LAYOUT,                ???);
+    add_kv(LFG_KV_EXPERT_COUNT,                      hparams.n_expert);
+    add_kv(LFG_KV_EXPERT_USED_COUNT,                 hparams.n_expert_used);
+    add_kv(LFG_KV_EXPERT_SHARED_COUNT,               hparams.n_expert_shared);
+    add_kv(LFG_KV_EXPERT_WEIGHTS_SCALE,              hparams.expert_weights_scale);
+    add_kv(LFG_KV_POOLING_TYPE,                      uint32_t(hparams.pooling_type));
+    add_kv(LFG_KV_LOGIT_SCALE,                       hparams.f_logit_scale);
+    add_kv(LFG_KV_DECODER_START_TOKEN_ID,            hparams.dec_start_token_id);
+    add_kv(LFG_KV_ATTN_LOGIT_SOFTCAPPING,            hparams.f_attn_logit_softcapping);
+    add_kv(LFG_KV_FINAL_LOGIT_SOFTCAPPING,           hparams.f_final_logit_softcapping);
+    add_kv(LFG_KV_SWIN_NORM,                         hparams.swin_norm);
+    add_kv(LFG_KV_RESCALE_EVERY_N_LAYERS,            hparams.rescale_every_n_layers);
+    add_kv(LFG_KV_TIME_MIX_EXTRA_DIM,                hparams.time_mix_extra_dim);
+    add_kv(LFG_KV_TIME_DECAY_EXTRA_DIM,              hparams.time_decay_extra_dim);
+    add_kv(LFG_KV_RESIDUAL_SCALE,                    hparams.f_residual_scale);
+    add_kv(LFG_KV_EMBEDDING_SCALE,                   hparams.f_embedding_scale);
 
-    add_kv(LLM_KV_ATTENTION_HEAD_COUNT,              hparams.n_head_arr, true);
-    add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV,           hparams.n_head_kv_arr, true);
-    add_kv(LLM_KV_ATTENTION_MAX_ALIBI_BIAS,          hparams.f_max_alibi_bias);
-    add_kv(LLM_KV_ATTENTION_CLAMP_KQV,               hparams.f_clamp_kqv);
-    add_kv(LLM_KV_ATTENTION_KEY_LENGTH,              hparams.n_embd_head_k);
-    add_kv(LLM_KV_ATTENTION_VALUE_LENGTH,            hparams.n_embd_head_v);
-    add_kv(LLM_KV_ATTENTION_LAYERNORM_EPS,           hparams.f_norm_eps);
-    add_kv(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,       hparams.f_norm_rms_eps);
-    add_kv(LLM_KV_ATTENTION_CAUSAL,                  hparams.causal_attn);
-    add_kv(LLM_KV_ATTENTION_Q_LORA_RANK,             hparams.n_lora_q);
-    add_kv(LLM_KV_ATTENTION_KV_LORA_RANK,            hparams.n_lora_kv);
-    add_kv(LLM_KV_ATTENTION_RELATIVE_BUCKETS_COUNT,  hparams.n_rel_attn_bkts);
-    add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW,          hparams.n_swa);
-    add_kv(LLM_KV_ATTENTION_SCALE,                   hparams.f_attention_scale);
+    add_kv(LFG_KV_ATTENTION_HEAD_COUNT,              hparams.n_head_arr, true);
+    add_kv(LFG_KV_ATTENTION_HEAD_COUNT_KV,           hparams.n_head_kv_arr, true);
+    add_kv(LFG_KV_ATTENTION_MAX_ALIBI_BIAS,          hparams.f_max_alibi_bias);
+    add_kv(LFG_KV_ATTENTION_CLAMP_KQV,               hparams.f_clamp_kqv);
+    add_kv(LFG_KV_ATTENTION_KEY_LENGTH,              hparams.n_embd_head_k);
+    add_kv(LFG_KV_ATTENTION_VALUE_LENGTH,            hparams.n_embd_head_v);
+    add_kv(LFG_KV_ATTENTION_LAYERNORM_EPS,           hparams.f_norm_eps);
+    add_kv(LFG_KV_ATTENTION_LAYERNORM_RMS_EPS,       hparams.f_norm_rms_eps);
+    add_kv(LFG_KV_ATTENTION_CAUSAL,                  hparams.causal_attn);
+    add_kv(LFG_KV_ATTENTION_Q_LORA_RANK,             hparams.n_lora_q);
+    add_kv(LFG_KV_ATTENTION_KV_LORA_RANK,            hparams.n_lora_kv);
+    add_kv(LFG_KV_ATTENTION_RELATIVE_BUCKETS_COUNT,  hparams.n_rel_attn_bkts);
+    add_kv(LFG_KV_ATTENTION_SLIDING_WINDOW,          hparams.n_swa);
+    add_kv(LFG_KV_ATTENTION_SCALE,                   hparams.f_attention_scale);
 
     const float rope_scaling_factor = hparams.rope_freq_scale_train == 1.0f ? 0.0f : 1.0f/hparams.rope_freq_scale_train;
 
-    add_kv(LLM_KV_ROPE_DIMENSION_COUNT,              hparams.n_rot);
-    add_kv(LLM_KV_ROPE_FREQ_BASE,                    hparams.rope_freq_base_train);
-    // add_kv(LLM_KV_ROPE_SCALE_LINEAR,                 rope_scaling_factor); // old name
-    add_kv(LLM_KV_ROPE_SCALING_TYPE,                 lfg_rope_scaling_type_name(hparams.rope_scaling_type_train));
-    add_kv(LLM_KV_ROPE_SCALING_FACTOR,               rope_scaling_factor);
-    add_kv(LLM_KV_ROPE_SCALING_ATTN_FACTOR,          hparams.rope_attn_factor);
-    add_kv(LLM_KV_ROPE_SCALING_ORIG_CTX_LEN,         hparams.n_ctx_orig_yarn);
-    add_kv(LLM_KV_ROPE_SCALING_FINETUNED,            hparams.rope_finetuned);
-    add_kv(LLM_KV_ROPE_SCALING_YARN_LOG_MUL,         hparams.rope_yarn_log_mul);
+    add_kv(LFG_KV_ROPE_DIMENSION_COUNT,              hparams.n_rot);
+    add_kv(LFG_KV_ROPE_FREQ_BASE,                    hparams.rope_freq_base_train);
+    // add_kv(LFG_KV_ROPE_SCALE_LINEAR,                 rope_scaling_factor); // old name
+    add_kv(LFG_KV_ROPE_SCALING_TYPE,                 lfg_rope_scaling_type_name(hparams.rope_scaling_type_train));
+    add_kv(LFG_KV_ROPE_SCALING_FACTOR,               rope_scaling_factor);
+    add_kv(LFG_KV_ROPE_SCALING_ATTN_FACTOR,          hparams.rope_attn_factor);
+    add_kv(LFG_KV_ROPE_SCALING_ORIG_CTX_LEN,         hparams.n_ctx_orig_yarn);
+    add_kv(LFG_KV_ROPE_SCALING_FINETUNED,            hparams.rope_finetuned);
+    add_kv(LFG_KV_ROPE_SCALING_YARN_LOG_MUL,         hparams.rope_yarn_log_mul);
 
     // TODO: implement split file support
-    // add_kv(LLM_KV_SPLIT_NO,                          ???);
-    // add_kv(LLM_KV_SPLIT_COUNT,                       ???);
-    // add_kv(LLM_KV_SPLIT_TENSORS_COUNT,               ???);
+    // add_kv(LFG_KV_SPLIT_NO,                          ???);
+    // add_kv(LFG_KV_SPLIT_COUNT,                       ???);
+    // add_kv(LFG_KV_SPLIT_TENSORS_COUNT,               ???);
 
-    add_kv(LLM_KV_SSM_INNER_SIZE,                    hparams.ssm_d_inner);
-    add_kv(LLM_KV_SSM_CONV_KERNEL,                   hparams.ssm_d_conv);
-    add_kv(LLM_KV_SSM_STATE_SIZE,                    hparams.ssm_d_state);
-    add_kv(LLM_KV_SSM_TIME_STEP_RANK,                hparams.ssm_dt_rank);
-    add_kv(LLM_KV_SSM_DT_B_C_RMS,                    hparams.ssm_dt_b_c_rms);
+    add_kv(LFG_KV_SSM_INNER_SIZE,                    hparams.ssm_d_inner);
+    add_kv(LFG_KV_SSM_CONV_KERNEL,                   hparams.ssm_d_conv);
+    add_kv(LFG_KV_SSM_STATE_SIZE,                    hparams.ssm_d_state);
+    add_kv(LFG_KV_SSM_TIME_STEP_RANK,                hparams.ssm_dt_rank);
+    add_kv(LFG_KV_SSM_DT_B_C_RMS,                    hparams.ssm_dt_b_c_rms);
 
-    add_kv(LLM_KV_WKV_HEAD_SIZE,                     hparams.wkv_head_size);
+    add_kv(LFG_KV_WKV_HEAD_SIZE,                     hparams.wkv_head_size);
 
-    add_kv(LLM_KV_TOKENIZER_MODEL,                   vocab.get_tokenizer_model());
-    add_kv(LLM_KV_TOKENIZER_PRE,                     vocab.get_tokenizer_pre());
-    add_kv(LLM_KV_TOKENIZER_LIST,                    tokens);
-    add_kv(LLM_KV_TOKENIZER_TOKEN_TYPE,              token_types);
-    add_kv(LLM_KV_TOKENIZER_TOKEN_TYPE_COUNT,        vocab.n_token_types());
-    add_kv(LLM_KV_TOKENIZER_SCORES,                  scores);
-    add_kv(LLM_KV_TOKENIZER_MERGES,                  vocab.get_bpe_merges());
+    add_kv(LFG_KV_TOKENIZER_MODEL,                   vocab.get_tokenizer_model());
+    add_kv(LFG_KV_TOKENIZER_PRE,                     vocab.get_tokenizer_pre());
+    add_kv(LFG_KV_TOKENIZER_LIST,                    tokens);
+    add_kv(LFG_KV_TOKENIZER_TOKEN_TYPE,              token_types);
+    add_kv(LFG_KV_TOKENIZER_TOKEN_TYPE_COUNT,        vocab.n_token_types());
+    add_kv(LFG_KV_TOKENIZER_SCORES,                  scores);
+    add_kv(LFG_KV_TOKENIZER_MERGES,                  vocab.get_bpe_merges());
     // FIXME lfg_token is type i32 but when reading in a GGUF file u32 is expected, not an issue for writing though
-    add_kv(LLM_KV_TOKENIZER_BOS_ID,                  uint32_t(vocab.token_bos()));
-    add_kv(LLM_KV_TOKENIZER_EOS_ID,                  uint32_t(vocab.token_eos()));
-    add_kv(LLM_KV_TOKENIZER_EOT_ID,                  uint32_t(vocab.token_eot()));
-    add_kv(LLM_KV_TOKENIZER_EOM_ID,                  uint32_t(vocab.token_eom()));
-    add_kv(LLM_KV_TOKENIZER_UNK_ID,                  uint32_t(vocab.token_unk()));
-    add_kv(LLM_KV_TOKENIZER_SEP_ID,                  uint32_t(vocab.token_sep()));
-    add_kv(LLM_KV_TOKENIZER_PAD_ID,                  uint32_t(vocab.token_pad()));
-    // add_kv(LLM_KV_TOKENIZER_CLS_ID,                  uint32_t(vocab.token_bos())); // deprecated
-    // add_kv(LLM_KV_TOKENIZER_MASK_ID,                 ???);
-    add_kv(LLM_KV_TOKENIZER_ADD_BOS,                 vocab.get_add_bos());
-    add_kv(LLM_KV_TOKENIZER_ADD_EOS,                 vocab.get_add_eos());
-    add_kv(LLM_KV_TOKENIZER_ADD_SEP,                 vocab.get_add_sep());
-    add_kv(LLM_KV_TOKENIZER_ADD_PREFIX,              vocab.get_add_space_prefix());
-    add_kv(LLM_KV_TOKENIZER_REMOVE_EXTRA_WS,         vocab.get_remove_extra_whitespaces());
-    add_kv(LLM_KV_TOKENIZER_PRECOMPILED_CHARSMAP,    vocab.get_precompiled_charsmap());
-    // add_kv(LLM_KV_TOKENIZER_HF_JSON,                 ???);
-    // add_kv(LLM_KV_TOKENIZER_RWKV,                    ???);
-    add_kv(LLM_KV_TOKENIZER_FIM_PRE_ID,              uint32_t(vocab.token_fim_pre()));
-    add_kv(LLM_KV_TOKENIZER_FIM_SUF_ID,              uint32_t(vocab.token_fim_suf()));
-    add_kv(LLM_KV_TOKENIZER_FIM_MID_ID,              uint32_t(vocab.token_fim_mid()));
-    add_kv(LLM_KV_TOKENIZER_FIM_PAD_ID,              uint32_t(vocab.token_fim_pad()));
-    add_kv(LLM_KV_TOKENIZER_FIM_REP_ID,              uint32_t(vocab.token_fim_rep()));
-    add_kv(LLM_KV_TOKENIZER_FIM_SEP_ID,              uint32_t(vocab.token_fim_sep()));
+    add_kv(LFG_KV_TOKENIZER_BOS_ID,                  uint32_t(vocab.token_bos()));
+    add_kv(LFG_KV_TOKENIZER_EOS_ID,                  uint32_t(vocab.token_eos()));
+    add_kv(LFG_KV_TOKENIZER_EOT_ID,                  uint32_t(vocab.token_eot()));
+    add_kv(LFG_KV_TOKENIZER_EOM_ID,                  uint32_t(vocab.token_eom()));
+    add_kv(LFG_KV_TOKENIZER_UNK_ID,                  uint32_t(vocab.token_unk()));
+    add_kv(LFG_KV_TOKENIZER_SEP_ID,                  uint32_t(vocab.token_sep()));
+    add_kv(LFG_KV_TOKENIZER_PAD_ID,                  uint32_t(vocab.token_pad()));
+    // add_kv(LFG_KV_TOKENIZER_CLS_ID,                  uint32_t(vocab.token_bos())); // deprecated
+    // add_kv(LFG_KV_TOKENIZER_MASK_ID,                 ???);
+    add_kv(LFG_KV_TOKENIZER_ADD_BOS,                 vocab.get_add_bos());
+    add_kv(LFG_KV_TOKENIZER_ADD_EOS,                 vocab.get_add_eos());
+    add_kv(LFG_KV_TOKENIZER_ADD_SEP,                 vocab.get_add_sep());
+    add_kv(LFG_KV_TOKENIZER_ADD_PREFIX,              vocab.get_add_space_prefix());
+    add_kv(LFG_KV_TOKENIZER_REMOVE_EXTRA_WS,         vocab.get_remove_extra_whitespaces());
+    add_kv(LFG_KV_TOKENIZER_PRECOMPILED_CHARSMAP,    vocab.get_precompiled_charsmap());
+    // add_kv(LFG_KV_TOKENIZER_HF_JSON,                 ???);
+    // add_kv(LFG_KV_TOKENIZER_RWKV,                    ???);
+    add_kv(LFG_KV_TOKENIZER_FIM_PRE_ID,              uint32_t(vocab.token_fim_pre()));
+    add_kv(LFG_KV_TOKENIZER_FIM_SUF_ID,              uint32_t(vocab.token_fim_suf()));
+    add_kv(LFG_KV_TOKENIZER_FIM_MID_ID,              uint32_t(vocab.token_fim_mid()));
+    add_kv(LFG_KV_TOKENIZER_FIM_PAD_ID,              uint32_t(vocab.token_fim_pad()));
+    add_kv(LFG_KV_TOKENIZER_FIM_REP_ID,              uint32_t(vocab.token_fim_rep()));
+    add_kv(LFG_KV_TOKENIZER_FIM_SEP_ID,              uint32_t(vocab.token_fim_sep()));
 
     // TODO: implement LoRA support
-    // add_kv(LLM_KV_ADAPTER_TYPE,                      ???);
-    // add_kv(LLM_KV_ADAPTER_LORA_ALPHA,                ???);
+    // add_kv(LFG_KV_ADAPTER_TYPE,                      ???);
+    // add_kv(LFG_KV_ADAPTER_LORA_ALPHA,                ???);
 
     // deprecated
-    // add_kv(LLM_KV_TOKENIZER_PREFIX_ID,               ???);
-    // add_kv(LLM_KV_TOKENIZER_SUFFIX_ID,               ???);
-    // add_kv(LLM_KV_TOKENIZER_MIDDLE_ID,               ???);
+    // add_kv(LFG_KV_TOKENIZER_PREFIX_ID,               ???);
+    // add_kv(LFG_KV_TOKENIZER_SUFFIX_ID,               ???);
+    // add_kv(LFG_KV_TOKENIZER_MIDDLE_ID,               ???);
 }
 
 void lfg_model_saver::add_tensors_from_model() {

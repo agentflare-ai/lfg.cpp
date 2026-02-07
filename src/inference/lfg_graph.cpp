@@ -16,7 +16,7 @@
 #include <stdexcept>
 #include <unordered_set>
 
-void llm_graph_input_embd::set_input(const lfg_ubatch * ubatch) {
+void lfg_graph_input_embd::set_input(const lfg_ubatch * ubatch) {
     if (ubatch->token) {
         const int64_t n_tokens = ubatch->n_tokens;
 
@@ -31,7 +31,7 @@ void llm_graph_input_embd::set_input(const lfg_ubatch * ubatch) {
     }
 }
 
-bool llm_graph_input_embd::can_reuse(const llm_graph_params & params) {
+bool lfg_graph_input_embd::can_reuse(const lfg_graph_params & params) {
     bool res = true;
 
     res &= (!tokens && !params.ubatch.token) || (tokens && tokens->ne[0] == params.ubatch.n_tokens);
@@ -40,7 +40,7 @@ bool llm_graph_input_embd::can_reuse(const llm_graph_params & params) {
     return res;
 }
 
-void llm_graph_input_pos::set_input(const lfg_ubatch * ubatch) {
+void lfg_graph_input_pos::set_input(const lfg_ubatch * ubatch) {
     if (ubatch->pos && pos) {
         const int64_t n_tokens = ubatch->n_tokens;
 
@@ -62,7 +62,7 @@ void llm_graph_input_pos::set_input(const lfg_ubatch * ubatch) {
     }
 }
 
-bool llm_graph_input_pos::can_reuse(const llm_graph_params & params) {
+bool lfg_graph_input_pos::can_reuse(const lfg_graph_params & params) {
     bool res = true;
 
     res &= pos->ne[0] == params.ubatch.n_tokens*n_pos_per_embd;
@@ -70,7 +70,7 @@ bool llm_graph_input_pos::can_reuse(const llm_graph_params & params) {
     return res;
 }
 
-void llm_graph_input_attn_temp::set_input(const lfg_ubatch * ubatch) {
+void lfg_graph_input_attn_temp::set_input(const lfg_ubatch * ubatch) {
     if (ubatch->pos && attn_scale) {
         const int64_t n_tokens = ubatch->n_tokens;
 
@@ -89,7 +89,7 @@ void llm_graph_input_attn_temp::set_input(const lfg_ubatch * ubatch) {
     }
 }
 
-void llm_graph_input_pos_bucket::set_input(const lfg_ubatch * ubatch) {
+void lfg_graph_input_pos_bucket::set_input(const lfg_ubatch * ubatch) {
     if (pos_bucket) {
         const int64_t n_tokens = ubatch->n_tokens;
 
@@ -106,13 +106,13 @@ void llm_graph_input_pos_bucket::set_input(const lfg_ubatch * ubatch) {
     }
 }
 
-void llm_graph_input_pos_bucket_kv::set_input(const lfg_ubatch * ubatch) {
+void lfg_graph_input_pos_bucket_kv::set_input(const lfg_ubatch * ubatch) {
     if (pos_bucket) {
         mctx->set_input_pos_bucket(pos_bucket, ubatch);
     }
 }
 
-void llm_graph_input_out_ids::set_input(const lfg_ubatch * ubatch) {
+void lfg_graph_input_out_ids::set_input(const lfg_ubatch * ubatch) {
     GGML_ASSERT(out_ids);
 
     const int64_t n_tokens = ubatch->n_tokens;
@@ -139,7 +139,7 @@ void llm_graph_input_out_ids::set_input(const lfg_ubatch * ubatch) {
     }
 }
 
-bool llm_graph_input_out_ids::can_reuse(const llm_graph_params & params) {
+bool lfg_graph_input_out_ids::can_reuse(const lfg_graph_params & params) {
     bool res = true;
 
     res &= n_outputs == params.n_outputs;
@@ -147,7 +147,7 @@ bool llm_graph_input_out_ids::can_reuse(const llm_graph_params & params) {
     return res;
 }
 
-void llm_graph_input_mean::set_input(const lfg_ubatch * ubatch) {
+void lfg_graph_input_mean::set_input(const lfg_ubatch * ubatch) {
     if (cparams.embeddings && cparams.pooling_type == LFG_POOLING_TYPE_MEAN) {
         const int64_t n_tokens     = ubatch->n_tokens;
         const int64_t n_seq_tokens = ubatch->n_seq_tokens;
@@ -190,7 +190,7 @@ void llm_graph_input_mean::set_input(const lfg_ubatch * ubatch) {
     }
 }
 
-void llm_graph_input_cls::set_input(const lfg_ubatch * ubatch) {
+void lfg_graph_input_cls::set_input(const lfg_ubatch * ubatch) {
     const int64_t n_tokens     = ubatch->n_tokens;
     const int64_t n_seqs_unq   = ubatch->n_seqs_unq;
 
@@ -239,7 +239,7 @@ void llm_graph_input_cls::set_input(const lfg_ubatch * ubatch) {
     }
 }
 
-void llm_graph_input_rs::set_input(const lfg_ubatch * ubatch) {
+void lfg_graph_input_rs::set_input(const lfg_ubatch * ubatch) {
     GGML_UNUSED(ubatch);
 
     const int64_t n_rs = mctx->get_n_rs();
@@ -255,7 +255,7 @@ void llm_graph_input_rs::set_input(const lfg_ubatch * ubatch) {
     }
 }
 
-bool llm_graph_input_rs::can_reuse(const llm_graph_params & params) {
+bool lfg_graph_input_rs::can_reuse(const lfg_graph_params & params) {
     const auto * mctx = static_cast<const lfg_memory_recurrent_context *>(params.mctx);
 
     this->mctx = mctx;
@@ -273,7 +273,7 @@ bool llm_graph_input_rs::can_reuse(const llm_graph_params & params) {
     return res;
 }
 
-void llm_graph_input_cross_embd::set_input(const lfg_ubatch * ubatch) {
+void lfg_graph_input_cross_embd::set_input(const lfg_ubatch * ubatch) {
     GGML_UNUSED(ubatch);
 
     if (cross_embd && !cross->v_embd.empty()) {
@@ -320,7 +320,7 @@ static void print_mask(const float * data, int64_t n_tokens, int64_t n_kv, int64
     }
 }
 
-void llm_graph_input_attn_no_cache::set_input(const lfg_ubatch * ubatch) {
+void lfg_graph_input_attn_no_cache::set_input(const lfg_ubatch * ubatch) {
     const int64_t n_kv     = ubatch->n_tokens;
     const int64_t n_tokens = ubatch->n_tokens;
 
@@ -386,14 +386,14 @@ void llm_graph_input_attn_no_cache::set_input(const lfg_ubatch * ubatch) {
     }
 }
 
-void llm_graph_input_attn_kv::set_input(const lfg_ubatch * ubatch) {
+void lfg_graph_input_attn_kv::set_input(const lfg_ubatch * ubatch) {
     mctx->set_input_k_idxs(self_k_idxs, ubatch);
     mctx->set_input_v_idxs(self_v_idxs, ubatch);
 
     mctx->set_input_kq_mask(self_kq_mask, ubatch, cparams.causal_attn);
 }
 
-bool llm_graph_input_attn_kv::can_reuse(const llm_graph_params & params) {
+bool lfg_graph_input_attn_kv::can_reuse(const lfg_graph_params & params) {
     const auto * mctx = static_cast<const lfg_kv_cache_context *>(params.mctx);
 
     this->mctx = mctx;
@@ -409,7 +409,7 @@ bool llm_graph_input_attn_kv::can_reuse(const llm_graph_params & params) {
     return res;
 }
 
-void llm_graph_input_attn_kv_iswa::set_input(const lfg_ubatch * ubatch) {
+void lfg_graph_input_attn_kv_iswa::set_input(const lfg_ubatch * ubatch) {
     mctx->get_base()->set_input_k_idxs(self_k_idxs, ubatch);
     mctx->get_base()->set_input_v_idxs(self_v_idxs, ubatch);
 
@@ -421,7 +421,7 @@ void llm_graph_input_attn_kv_iswa::set_input(const lfg_ubatch * ubatch) {
     mctx->get_swa()->set_input_kq_mask(self_kq_mask_swa, ubatch, cparams.causal_attn);
 }
 
-bool llm_graph_input_attn_kv_iswa::can_reuse(const llm_graph_params & params) {
+bool lfg_graph_input_attn_kv_iswa::can_reuse(const lfg_graph_params & params) {
     const auto * mctx = static_cast<const lfg_kv_cache_iswa_context *>(params.mctx);
 
     this->mctx = mctx;
@@ -443,7 +443,7 @@ bool llm_graph_input_attn_kv_iswa::can_reuse(const llm_graph_params & params) {
     return res;
 }
 
-void llm_graph_input_attn_cross::set_input(const lfg_ubatch * ubatch) {
+void lfg_graph_input_attn_cross::set_input(const lfg_ubatch * ubatch) {
     GGML_ASSERT(cross_kq_mask);
 
     const int64_t n_enc    = cross_kq_mask->ne[0];
@@ -471,7 +471,7 @@ void llm_graph_input_attn_cross::set_input(const lfg_ubatch * ubatch) {
     }
 }
 
-void llm_graph_input_mem_hybrid::set_input(const lfg_ubatch * ubatch) {
+void lfg_graph_input_mem_hybrid::set_input(const lfg_ubatch * ubatch) {
     mctx->get_attn()->set_input_k_idxs(inp_attn->self_k_idxs, ubatch);
     mctx->get_attn()->set_input_v_idxs(inp_attn->self_v_idxs, ubatch);
 
@@ -490,7 +490,7 @@ void llm_graph_input_mem_hybrid::set_input(const lfg_ubatch * ubatch) {
     }
 }
 
-bool llm_graph_input_mem_hybrid::can_reuse(const llm_graph_params & params) {
+bool lfg_graph_input_mem_hybrid::can_reuse(const lfg_graph_params & params) {
     const auto * mctx = static_cast<const lfg_memory_hybrid_context *>(params.mctx);
 
     this->mctx = mctx;
@@ -514,7 +514,7 @@ bool llm_graph_input_mem_hybrid::can_reuse(const llm_graph_params & params) {
     return res;
 }
 
-void llm_graph_input_mem_hybrid_iswa::set_input(const lfg_ubatch * ubatch) {
+void lfg_graph_input_mem_hybrid_iswa::set_input(const lfg_ubatch * ubatch) {
     const auto * attn_ctx = mctx->get_attn();
 
     // base tensors may not be allocated if there are no non-SWA attention layers
@@ -546,7 +546,7 @@ void llm_graph_input_mem_hybrid_iswa::set_input(const lfg_ubatch * ubatch) {
     }
 }
 
-bool llm_graph_input_mem_hybrid_iswa::can_reuse(const llm_graph_params & params) {
+bool lfg_graph_input_mem_hybrid_iswa::can_reuse(const lfg_graph_params & params) {
     const auto * mctx = static_cast<const lfg_memory_hybrid_iswa_context *>(params.mctx);
 
     this->mctx = mctx;
@@ -584,7 +584,7 @@ bool llm_graph_input_mem_hybrid_iswa::can_reuse(const llm_graph_params & params)
     return res;
 }
 
-void llm_graph_input_sampling::set_input(const lfg_ubatch * ubatch) {
+void lfg_graph_input_sampling::set_input(const lfg_ubatch * ubatch) {
     // set the inputs only for the active samplers in the current ubatch
     std::unordered_set<lfg_seq_id> active_samplers;
     for (uint32_t i = 0; i < ubatch->n_tokens; i++) {
@@ -607,7 +607,7 @@ void llm_graph_input_sampling::set_input(const lfg_ubatch * ubatch) {
     }
 }
 
-bool llm_graph_input_sampling::can_reuse(const llm_graph_params & params) {
+bool lfg_graph_input_sampling::can_reuse(const lfg_graph_params & params) {
     if (samplers.size() != params.samplers.size()) {
         return false;
     }
@@ -622,21 +622,21 @@ bool llm_graph_input_sampling::can_reuse(const llm_graph_params & params) {
 }
 
 //
-// llm_graph_result
+// lfg_graph_result
 //
 
-llm_graph_result::llm_graph_result(int64_t max_nodes) : max_nodes(max_nodes) {
+lfg_graph_result::lfg_graph_result(int64_t max_nodes) : max_nodes(max_nodes) {
     reset();
 
     const char * LFG_GRAPH_RESULT_DEBUG = getenv("LFG_GRAPH_RESULT_DEBUG");
     debug = LFG_GRAPH_RESULT_DEBUG ? atoi(LFG_GRAPH_RESULT_DEBUG) : 0;
 }
 
-int64_t llm_graph_result::get_max_nodes() const {
+int64_t lfg_graph_result::get_max_nodes() const {
     return max_nodes;
 }
 
-void llm_graph_result::reset() {
+void lfg_graph_result::reset() {
     t_tokens      = nullptr;
     t_logits      = nullptr;
     t_embd        = nullptr;
@@ -663,13 +663,13 @@ void llm_graph_result::reset() {
     gf = ggml_new_graph_custom(ctx_compute.get(), max_nodes, false);
 }
 
-void llm_graph_result::set_inputs(const lfg_ubatch * ubatch) {
+void lfg_graph_result::set_inputs(const lfg_ubatch * ubatch) {
     for (auto & input : inputs) {
         input->set_input(ubatch);
     }
 }
 
-void llm_graph_result::set_outputs() {
+void lfg_graph_result::set_outputs() {
     if (t_logits != nullptr) {
         ggml_set_output(t_logits);
     }
@@ -701,7 +701,7 @@ void llm_graph_result::set_outputs() {
     }
 }
 
-bool llm_graph_result::can_reuse(const llm_graph_params & params) {
+bool lfg_graph_result::can_reuse(const lfg_graph_params & params) {
     if (!this->params.allow_reuse(params)) {
         if (debug > 1) {
             LFG_LOG_DEBUG("%s: cannot reuse graph due to incompatible graph parameters\n", __func__);
@@ -733,20 +733,20 @@ bool llm_graph_result::can_reuse(const llm_graph_params & params) {
     return res;
 }
 
-llm_graph_input_i * llm_graph_result::add_input(llm_graph_input_ptr input) {
+lfg_graph_input_i * lfg_graph_result::add_input(lfg_graph_input_ptr input) {
     inputs.emplace_back(std::move(input));
     return inputs.back().get();
 }
 
-void llm_graph_result::set_params(const llm_graph_params & params) {
+void lfg_graph_result::set_params(const lfg_graph_params & params) {
     this->params = params;
 }
 
 //
-// llm_graph_context
+// lfg_graph_context
 //
 
-llm_graph_context::llm_graph_context(const llm_graph_params & params) :
+lfg_graph_context::lfg_graph_context(const lfg_graph_params & params) :
     arch             (params.arch),
     hparams          (params.hparams),
     cparams          (params.cparams),
@@ -790,19 +790,19 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
         res->set_params(params);
     }
 
-void llm_graph_context::cb(ggml_tensor * cur, const char * name, int il) const {
+void lfg_graph_context::cb(ggml_tensor * cur, const char * name, int il) const {
     if (cb_func) {
         cb_func(ubatch, cur, name, il);
     }
 }
 
-ggml_tensor * llm_graph_context::build_cvec(
+ggml_tensor * lfg_graph_context::build_cvec(
          ggml_tensor * cur,
                  int   il) const {
     return cvec->apply_to(ctx0, cur, il);
 }
 
-ggml_tensor * llm_graph_context::build_lora_mm(
+ggml_tensor * lfg_graph_context::build_lora_mm(
           ggml_tensor * w,
           ggml_tensor * cur) const {
     ggml_tensor * res = ggml_mul_mat(ctx0, w, cur);
@@ -828,7 +828,7 @@ ggml_tensor * llm_graph_context::build_lora_mm(
     return res;
 }
 
-ggml_tensor * llm_graph_context::build_lora_mm_id(
+ggml_tensor * lfg_graph_context::build_lora_mm_id(
           ggml_tensor * w,   // ggml_tensor * as
           ggml_tensor * cur, // ggml_tensor * b
           ggml_tensor * ids) const {
@@ -856,16 +856,16 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
     return res;
 }
 
-ggml_tensor * llm_graph_context::build_norm(
+ggml_tensor * lfg_graph_context::build_norm(
          ggml_tensor * cur,
          ggml_tensor * mw,
          ggml_tensor * mb,
-       llm_norm_type   type,
+       lfg_norm_type   type,
                  int   il) const {
     switch (type) {
-        case LLM_NORM:       cur = ggml_norm    (ctx0, cur, hparams.f_norm_eps);     break;
-        case LLM_NORM_RMS:   cur = ggml_rms_norm(ctx0, cur, hparams.f_norm_rms_eps); break;
-        case LLM_NORM_GROUP:
+        case LFG_NORM:       cur = ggml_norm    (ctx0, cur, hparams.f_norm_eps);     break;
+        case LFG_NORM_RMS:   cur = ggml_rms_norm(ctx0, cur, hparams.f_norm_rms_eps); break;
+        case LFG_NORM_GROUP:
             {
                 cur = ggml_reshape_3d(ctx0, cur, cur->ne[0], 1, cur->ne[1]);
                 cur = ggml_group_norm(ctx0, cur, hparams.n_norm_groups, hparams.f_norm_group_eps);
@@ -891,7 +891,7 @@ ggml_tensor * llm_graph_context::build_norm(
     return cur;
 }
 
-ggml_tensor * llm_graph_context::build_ffn(
+ggml_tensor * lfg_graph_context::build_ffn(
          ggml_tensor * cur,
          ggml_tensor * up,
          ggml_tensor * up_b,
@@ -903,8 +903,8 @@ ggml_tensor * llm_graph_context::build_ffn(
          ggml_tensor * down_b,
          ggml_tensor * down_s,
          ggml_tensor * act_scales,
-     llm_ffn_op_type   type_op,
-   llm_ffn_gate_type   type_gate,
+     lfg_ffn_op_type   type_op,
+   lfg_ffn_gate_type   type_gate,
                  int   il) const {
     ggml_tensor * tmp = up ? build_lora_mm(up, cur) : cur;
     cb(tmp, "ffn_up", il);
@@ -921,12 +921,12 @@ ggml_tensor * llm_graph_context::build_ffn(
 
     if (gate) {
         switch (type_gate) {
-            case LLM_FFN_SEQ:
+            case LFG_FFN_SEQ:
                 {
                     cur = build_lora_mm(gate, tmp);
                     cb(cur, "ffn_gate", il);
                 } break;
-            case LLM_FFN_PAR:
+            case LFG_FFN_PAR:
                 {
                     cur = build_lora_mm(gate, cur);
                     cb(cur, "ffn_gate", il);
@@ -948,20 +948,20 @@ ggml_tensor * llm_graph_context::build_ffn(
     }
 
     switch (type_op) {
-        case LLM_FFN_SILU:
-            if (gate && type_gate == LLM_FFN_PAR) {
+        case LFG_FFN_SILU:
+            if (gate && type_gate == LFG_FFN_PAR) {
                 cur = ggml_swiglu_split(ctx0, cur, tmp);
                 cb(cur, "ffn_swiglu", il);
-                type_gate = LLM_FFN_SEQ;
+                type_gate = LFG_FFN_SEQ;
             } else {
                 cur = ggml_silu(ctx0, cur);
                 cb(cur, "ffn_silu", il);
             } break;
-        case LLM_FFN_GELU:
-            if (gate && type_gate == LLM_FFN_PAR) {
+        case LFG_FFN_GELU:
+            if (gate && type_gate == LFG_FFN_PAR) {
                 cur = ggml_geglu_split(ctx0, cur, tmp);
                 cb(cur, "ffn_geglu", il);
-                type_gate = LLM_FFN_SEQ;
+                type_gate = LFG_FFN_SEQ;
             } else {
                 cur = ggml_gelu(ctx0, cur);
                 cb(cur, "ffn_gelu", il);
@@ -970,16 +970,16 @@ ggml_tensor * llm_graph_context::build_ffn(
                     cb(cur, "ffn_act", il);
                 }
             } break;
-        case LLM_FFN_RELU:
-            if (gate && type_gate == LLM_FFN_PAR) {
+        case LFG_FFN_RELU:
+            if (gate && type_gate == LFG_FFN_PAR) {
                 cur = ggml_reglu_split(ctx0, cur, tmp);
                 cb(cur, "ffn_reglu", il);
-                type_gate = LLM_FFN_SEQ;
+                type_gate = LFG_FFN_SEQ;
             } else {
                 cur = ggml_relu(ctx0, cur);
                 cb(cur, "ffn_relu", il);
             } break;
-        case LLM_FFN_RELU_SQR:
+        case LFG_FFN_RELU_SQR:
             {
                 cur = ggml_relu(ctx0, cur);
                 cb(cur, "ffn_relu", il);
@@ -987,17 +987,17 @@ ggml_tensor * llm_graph_context::build_ffn(
                 cur = ggml_sqr(ctx0, cur);
                 cb(cur, "ffn_sqr(relu)", il);
             } break;
-        case LLM_FFN_SWIGLU:
+        case LFG_FFN_SWIGLU:
             {
                 cur = ggml_swiglu(ctx0, cur);
                 cb(cur, "ffn_swiglu", il);
             } break;
-        case LLM_FFN_GEGLU:
+        case LFG_FFN_GEGLU:
             {
                 cur = ggml_geglu(ctx0, cur);
                 cb(cur, "ffn_geglu", il);
             } break;
-        case LLM_FFN_REGLU:
+        case LFG_FFN_REGLU:
             {
                 cur = ggml_reglu(ctx0, cur);
                 cb(cur, "ffn_reglu", il);
@@ -1007,7 +1007,7 @@ ggml_tensor * llm_graph_context::build_ffn(
             throw std::runtime_error("unsupported ffn op");
     }
 
-    if (gate && type_gate == LLM_FFN_PAR) {
+    if (gate && type_gate == LFG_FFN_PAR) {
         cur = ggml_mul(ctx0, cur, tmp);
         cb(cur, "ffn_gate_par", il);
     }
@@ -1036,7 +1036,7 @@ ggml_tensor * llm_graph_context::build_ffn(
     return cur;
 }
 
-ggml_tensor * llm_graph_context::build_moe_ffn(
+ggml_tensor * lfg_graph_context::build_moe_ffn(
          ggml_tensor * cur,
          ggml_tensor * gate_inp,
          ggml_tensor * up_exps,
@@ -1045,7 +1045,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
          ggml_tensor * exp_probs_b,
              int64_t   n_expert,
              int64_t   n_expert_used,
-     llm_ffn_op_type   type_op,
+     lfg_ffn_op_type   type_op,
                 bool   norm_w,
                 bool   scale_w,
                float   w_scale,
@@ -1071,7 +1071,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     );
 }
 
-ggml_tensor * llm_graph_context::build_moe_ffn(
+ggml_tensor * lfg_graph_context::build_moe_ffn(
          ggml_tensor * cur,
          ggml_tensor * gate_inp,
          ggml_tensor * gate_inp_b,
@@ -1084,7 +1084,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
          ggml_tensor * exp_probs_b,
              int64_t   n_expert,
              int64_t   n_expert_used,
-     llm_ffn_op_type   type_op,
+     lfg_ffn_op_type   type_op,
                 bool   norm_w,
                 bool   scale_w,
                float   w_scale,
@@ -1252,7 +1252,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     }
 
     switch (type_op) {
-        case LLM_FFN_SILU:
+        case LFG_FFN_SILU:
             if (gate_exps) {
                 cur = ggml_swiglu_split(ctx0, cur, up);
                 cb(cur, "ffn_moe_swiglu", il);
@@ -1260,7 +1260,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                 cur = ggml_silu(ctx0, cur);
                 cb(cur, "ffn_moe_silu", il);
             } break;
-        case LLM_FFN_GELU:
+        case LFG_FFN_GELU:
             if (gate_exps) {
                 cur = ggml_geglu_split(ctx0, cur, up);
                 cb(cur, "ffn_moe_geglu", il);
@@ -1268,7 +1268,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                 cur = ggml_gelu(ctx0, cur);
                 cb(cur, "ffn_moe_gelu", il);
             } break;
-        case LLM_FFN_SWIGLU_OAI_MOE:
+        case LFG_FFN_SWIGLU_OAI_MOE:
             {
                 // TODO: move to hparams?
                 constexpr float alpha = 1.702f;
@@ -1276,7 +1276,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                 cur = ggml_swiglu_oai(ctx0, cur, up, alpha, limit);
                 cb(cur, "ffn_moe_swiglu_oai", il);
             } break;
-        case LLM_FFN_RELU:
+        case LFG_FFN_RELU:
             if (gate_exps) {
                 cur = ggml_reglu_split(ctx0, cur, up);
                 cb(cur, "ffn_moe_reglu", il);
@@ -1284,7 +1284,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                 cur = ggml_relu(ctx0, cur);
                 cb(cur, "ffn_moe_relu", il);
             } break;
-        case LLM_FFN_RELU_SQR:
+        case LFG_FFN_RELU_SQR:
             if (gate_exps) {
                 // TODO: add support for gated squared relu
                 lfg_set_last_error(LFG_ERROR_UNSUPPORTED, "%s: gated squared relu not implemented", __func__);
@@ -1344,8 +1344,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
 }
 
 // input embeddings with optional lora
-ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
-    auto inp = std::make_unique<llm_graph_input_embd>();
+ggml_tensor * lfg_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
+    auto inp = std::make_unique<lfg_graph_input_embd>();
 
     ggml_tensor * cur = nullptr;
 
@@ -1397,8 +1397,8 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
     return cur;
 }
 
-ggml_tensor * llm_graph_context::build_inp_pos() const {
-    auto inp = std::make_unique<llm_graph_input_pos>(hparams.n_pos_per_embd());
+ggml_tensor * lfg_graph_context::build_inp_pos() const {
+    auto inp = std::make_unique<lfg_graph_input_pos>(hparams.n_pos_per_embd());
 
     auto & cur = inp->pos;
 
@@ -1410,8 +1410,8 @@ ggml_tensor * llm_graph_context::build_inp_pos() const {
     return cur;
 }
 
-ggml_tensor * llm_graph_context::build_inp_attn_scale() const {
-    auto inp = std::make_unique<llm_graph_input_attn_temp>(hparams.n_attn_temp_floor_scale, hparams.f_attn_temp_scale, hparams.f_attn_temp_offset);
+ggml_tensor * lfg_graph_context::build_inp_attn_scale() const {
+    auto inp = std::make_unique<lfg_graph_input_attn_temp>(hparams.n_attn_temp_floor_scale, hparams.f_attn_temp_scale, hparams.f_attn_temp_offset);
 
     auto & cur = inp->attn_scale;
 
@@ -1424,7 +1424,7 @@ ggml_tensor * llm_graph_context::build_inp_attn_scale() const {
     return cur;
 }
 
-ggml_tensor * llm_graph_context::build_inp_out_ids() const {
+ggml_tensor * lfg_graph_context::build_inp_out_ids() const {
     // note: when all tokens are output, we could skip this optimization to spare the ggml_get_rows() calls,
     //       but this would make the graph topology depend on the number of output tokens, which can interere with
     //       features that require constant topology such as pipline parallelism
@@ -1433,7 +1433,7 @@ ggml_tensor * llm_graph_context::build_inp_out_ids() const {
     //    return nullptr;
     //}
 
-    auto inp = std::make_unique<llm_graph_input_out_ids>(hparams, cparams, n_outputs);
+    auto inp = std::make_unique<lfg_graph_input_out_ids>(hparams, cparams, n_outputs);
 
     auto & cur = inp->out_ids;
 
@@ -1445,8 +1445,8 @@ ggml_tensor * llm_graph_context::build_inp_out_ids() const {
     return cur;
 }
 
-ggml_tensor * llm_graph_context::build_inp_mean() const {
-    auto inp = std::make_unique<llm_graph_input_mean>(cparams);
+ggml_tensor * lfg_graph_context::build_inp_mean() const {
+    auto inp = std::make_unique<lfg_graph_input_mean>(cparams);
 
     auto & cur = inp->mean;
 
@@ -1458,8 +1458,8 @@ ggml_tensor * llm_graph_context::build_inp_mean() const {
     return cur;
 }
 
-ggml_tensor * llm_graph_context::build_inp_cls() const {
-    auto inp = std::make_unique<llm_graph_input_cls>(cparams, arch);
+ggml_tensor * lfg_graph_context::build_inp_cls() const {
+    auto inp = std::make_unique<lfg_graph_input_cls>(cparams, arch);
 
     auto & cur = inp->cls;
 
@@ -1471,8 +1471,8 @@ ggml_tensor * llm_graph_context::build_inp_cls() const {
     return cur;
 }
 
-ggml_tensor * llm_graph_context::build_inp_cross_embd() const {
-    auto inp = std::make_unique<llm_graph_input_cross_embd>(cross);
+ggml_tensor * lfg_graph_context::build_inp_cross_embd() const {
+    auto inp = std::make_unique<lfg_graph_input_cross_embd>(cross);
 
     auto & cur = inp->cross_embd;
 
@@ -1494,8 +1494,8 @@ ggml_tensor * llm_graph_context::build_inp_cross_embd() const {
     return cur;
 }
 
-ggml_tensor * llm_graph_context::build_inp_pos_bucket_enc() const {
-    auto inp = std::make_unique<llm_graph_input_pos_bucket>(hparams);
+ggml_tensor * lfg_graph_context::build_inp_pos_bucket_enc() const {
+    auto inp = std::make_unique<lfg_graph_input_pos_bucket>(hparams);
 
     auto & cur = inp->pos_bucket;
 
@@ -1507,10 +1507,10 @@ ggml_tensor * llm_graph_context::build_inp_pos_bucket_enc() const {
     return cur;
 }
 
-ggml_tensor * llm_graph_context::build_inp_pos_bucket_dec() const {
+ggml_tensor * lfg_graph_context::build_inp_pos_bucket_dec() const {
     const auto * mctx_cur = static_cast<const lfg_kv_cache_context *>(mctx);
 
-    auto inp = std::make_unique<llm_graph_input_pos_bucket_kv>(hparams, mctx_cur);
+    auto inp = std::make_unique<lfg_graph_input_pos_bucket_kv>(hparams, mctx_cur);
 
     const auto n_kv = mctx_cur->get_n_kv();
 
@@ -1524,7 +1524,7 @@ ggml_tensor * llm_graph_context::build_inp_pos_bucket_dec() const {
     return cur;
 }
 
-ggml_tensor * llm_graph_context::build_pos_bias(ggml_tensor * pos_bucket, ggml_tensor * attn_rel_b) const {
+ggml_tensor * lfg_graph_context::build_pos_bias(ggml_tensor * pos_bucket, ggml_tensor * attn_rel_b) const {
     ggml_tensor * pos_bucket_1d = ggml_reshape_1d(ctx0, pos_bucket, pos_bucket->ne[0] * pos_bucket->ne[1]);
     cb(pos_bucket_1d, "pos_bucket_1d", -1);
 
@@ -1539,7 +1539,7 @@ ggml_tensor * llm_graph_context::build_pos_bias(ggml_tensor * pos_bucket, ggml_t
     return pos_bias;
 }
 
-ggml_tensor * llm_graph_context::build_attn_mha(
+ggml_tensor * lfg_graph_context::build_attn_mha(
          ggml_tensor * q,
          ggml_tensor * k,
          ggml_tensor * v,
@@ -1676,8 +1676,8 @@ ggml_tensor * llm_graph_context::build_attn_mha(
     return cur;
 }
 
-llm_graph_input_attn_no_cache * llm_graph_context::build_attn_inp_no_cache() const {
-    auto inp = std::make_unique<llm_graph_input_attn_no_cache>(hparams, cparams);
+lfg_graph_input_attn_no_cache * lfg_graph_context::build_attn_inp_no_cache() const {
+    auto inp = std::make_unique<lfg_graph_input_attn_no_cache>(hparams, cparams);
 
     // note: there is no KV cache, so the number of KV values is equal to the number of tokens in the batch
     inp->self_kq_mask = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, n_tokens, n_tokens, 1, 1);
@@ -1695,11 +1695,11 @@ llm_graph_input_attn_no_cache * llm_graph_context::build_attn_inp_no_cache() con
         inp->self_kq_mask_swa_cnv = nullptr;
     }
 
-    return (llm_graph_input_attn_no_cache *) res->add_input(std::move(inp));
+    return (lfg_graph_input_attn_no_cache *) res->add_input(std::move(inp));
 }
 
-ggml_tensor * llm_graph_context::build_attn(
-        llm_graph_input_attn_no_cache * inp,
+ggml_tensor * lfg_graph_context::build_attn(
+        lfg_graph_input_attn_no_cache * inp,
         ggml_tensor * wo,
         ggml_tensor * wo_b,
         ggml_tensor * q_cur,
@@ -1751,14 +1751,14 @@ ggml_tensor * llm_graph_context::build_attn(
     return cur;
 }
 
-static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
+static std::unique_ptr<lfg_graph_input_attn_kv> build_attn_inp_kv_impl(
            ggml_context * ctx0,
      const lfg_ubatch & ubatch,
     const lfg_hparams & hparams,
     const lfg_cparams & cparams,
     const lfg_kv_cache_context * mctx_cur) {
 
-    auto inp = std::make_unique<llm_graph_input_attn_kv>(hparams, cparams, mctx_cur);
+    auto inp = std::make_unique<lfg_graph_input_attn_kv>(hparams, cparams, mctx_cur);
 
     {
         GGML_ASSERT(hparams.swa_type == LFG_SWA_TYPE_NONE && "Use lfg_kv_cache_iswa for SWA");
@@ -1779,16 +1779,16 @@ static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
     return inp;
 }
 
-llm_graph_input_attn_kv * llm_graph_context::build_attn_inp_kv() const {
+lfg_graph_input_attn_kv * lfg_graph_context::build_attn_inp_kv() const {
     const auto * mctx_cur = static_cast<const lfg_kv_cache_context *>(mctx);
 
     auto inp = build_attn_inp_kv_impl(ctx0, ubatch, hparams, cparams, mctx_cur);
 
-    return (llm_graph_input_attn_kv *) res->add_input(std::move(inp));
+    return (lfg_graph_input_attn_kv *) res->add_input(std::move(inp));
 }
 
-ggml_tensor * llm_graph_context::build_attn(
-        llm_graph_input_attn_kv * inp,
+ggml_tensor * lfg_graph_context::build_attn(
+        lfg_graph_input_attn_kv * inp,
         ggml_tensor * wo,
         ggml_tensor * wo_b,
         ggml_tensor * q_cur,
@@ -1843,8 +1843,8 @@ ggml_tensor * llm_graph_context::build_attn(
     return cur;
 }
 
-ggml_tensor * llm_graph_context::build_attn(
-        llm_graph_input_attn_kv_iswa * inp,
+ggml_tensor * lfg_graph_context::build_attn(
+        lfg_graph_input_attn_kv_iswa * inp,
         ggml_tensor * wo,
         ggml_tensor * wo_b,
         ggml_tensor * q_cur,
@@ -1912,8 +1912,8 @@ ggml_tensor * llm_graph_context::build_attn(
     return cur;
 }
 
-llm_graph_input_attn_cross * llm_graph_context::build_attn_inp_cross() const {
-    auto inp = std::make_unique<llm_graph_input_attn_cross>(cross);
+lfg_graph_input_attn_cross * lfg_graph_context::build_attn_inp_cross() const {
+    auto inp = std::make_unique<lfg_graph_input_attn_cross>(cross);
 
     const int32_t n_enc = !cross->v_embd.empty() ? cross->n_enc : static_cast<int32_t>(hparams.n_ctx_train);
 
@@ -1922,11 +1922,11 @@ llm_graph_input_attn_cross * llm_graph_context::build_attn_inp_cross() const {
 
     inp->cross_kq_mask_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->cross_kq_mask, GGML_TYPE_F16) : inp->cross_kq_mask;
 
-    return (llm_graph_input_attn_cross *) res->add_input(std::move(inp));
+    return (lfg_graph_input_attn_cross *) res->add_input(std::move(inp));
 }
 
-ggml_tensor * llm_graph_context::build_attn(
-        llm_graph_input_attn_cross * inp,
+ggml_tensor * lfg_graph_context::build_attn(
+        lfg_graph_input_attn_cross * inp,
         ggml_tensor * wo,
         ggml_tensor * wo_b,
         ggml_tensor * q_cur,
@@ -1970,10 +1970,10 @@ ggml_tensor * llm_graph_context::build_attn(
 // TODO: maybe separate the inner implementation into a separate function
 //       like with the non-sliding window equivalent
 //       once sliding-window hybrid caches are a thing.
-llm_graph_input_attn_kv_iswa * llm_graph_context::build_attn_inp_kv_iswa() const {
+lfg_graph_input_attn_kv_iswa * lfg_graph_context::build_attn_inp_kv_iswa() const {
     const auto * mctx_cur = static_cast<const lfg_kv_cache_iswa_context *>(mctx);
 
-    auto inp = std::make_unique<llm_graph_input_attn_kv_iswa>(hparams, cparams, mctx_cur);
+    auto inp = std::make_unique<lfg_graph_input_attn_kv_iswa>(hparams, cparams, mctx_cur);
 
     const auto n_stream = cparams.kv_unified ? 1 : ubatch.n_seqs_unq;
 
@@ -2007,10 +2007,10 @@ llm_graph_input_attn_kv_iswa * llm_graph_context::build_attn_inp_kv_iswa() const
         ggml_set_name(inp->self_kq_mask_swa_cnv, "self_kq_mask_swa_cnv");
     }
 
-    return (llm_graph_input_attn_kv_iswa *) res->add_input(std::move(inp));
+    return (lfg_graph_input_attn_kv_iswa *) res->add_input(std::move(inp));
 }
 
-ggml_tensor * llm_graph_context::build_rs(
+ggml_tensor * lfg_graph_context::build_rs(
         ggml_tensor * s,
         ggml_tensor * state_copy_main,
         ggml_tensor * state_copy_extra,
@@ -2020,7 +2020,7 @@ ggml_tensor * llm_graph_context::build_rs(
            uint32_t   rs_head,
            uint32_t   rs_size,
             int32_t   rs_zero,
-        const llm_graph_get_rows_fn & get_state_rows) const {
+        const lfg_graph_get_rows_fn & get_state_rows) const {
 
     ggml_tensor * states = ggml_reshape_2d(ctx0, s, state_size, rs_size);
 
@@ -2045,12 +2045,12 @@ ggml_tensor * llm_graph_context::build_rs(
     return output_states;
 }
 
-static std::unique_ptr<llm_graph_input_rs> build_rs_inp_impl(
+static std::unique_ptr<lfg_graph_input_rs> build_rs_inp_impl(
            ggml_context * ctx0,
      const lfg_ubatch & ubatch,
     const lfg_memory_recurrent_context * mctx_cur) {
 
-    auto inp = std::make_unique<llm_graph_input_rs>(mctx_cur);
+    auto inp = std::make_unique<lfg_graph_input_rs>(mctx_cur);
 
     const int64_t n_rs   = mctx_cur->get_n_rs();
     const int64_t n_seqs = ubatch.n_seqs;
@@ -2067,20 +2067,20 @@ static std::unique_ptr<llm_graph_input_rs> build_rs_inp_impl(
     return inp;
 }
 
-llm_graph_input_rs * llm_graph_context::build_rs_inp() const {
+lfg_graph_input_rs * lfg_graph_context::build_rs_inp() const {
     const auto * mctx_cur = static_cast<const lfg_memory_recurrent_context *>(mctx);
 
     auto inp = build_rs_inp_impl(ctx0, ubatch, mctx_cur);
 
-    return (llm_graph_input_rs *) res->add_input(std::move(inp));
+    return (lfg_graph_input_rs *) res->add_input(std::move(inp));
 }
 
-ggml_tensor * llm_graph_context::build_rs(
-        llm_graph_input_rs * inp,
+ggml_tensor * lfg_graph_context::build_rs(
+        lfg_graph_input_rs * inp,
         ggml_tensor * s,
             int32_t   state_size,
             int32_t   n_seqs,
-        const llm_graph_get_rows_fn & get_state_rows) const {
+        const lfg_graph_get_rows_fn & get_state_rows) const {
     const auto * kv_state = inp->mctx;
 
     return build_rs(s, inp->s_copy_main, inp->s_copy_extra, state_size, n_seqs,
@@ -2088,8 +2088,8 @@ ggml_tensor * llm_graph_context::build_rs(
                     get_state_rows);
 }
 
-ggml_tensor * llm_graph_context::build_rwkv_token_shift_load(
-    llm_graph_input_rs * inp,
+ggml_tensor * lfg_graph_context::build_rwkv_token_shift_load(
+    lfg_graph_input_rs * inp,
     [[maybe_unused]] const lfg_ubatch & ubatch_arg,
                    int   il) const {
     const auto * mctx_cur = static_cast<const lfg_memory_recurrent_context *>(mctx);
@@ -2109,7 +2109,7 @@ ggml_tensor * llm_graph_context::build_rwkv_token_shift_load(
     return token_shift;
 }
 
-ggml_tensor * llm_graph_context::build_rwkv_token_shift_store(
+ggml_tensor * lfg_graph_context::build_rwkv_token_shift_store(
          ggml_tensor * token_shift,
   [[maybe_unused]] const lfg_ubatch & ubatch_arg,
                  int   il) const {
@@ -2129,18 +2129,18 @@ ggml_tensor * llm_graph_context::build_rwkv_token_shift_store(
     );
 }
 
-llm_graph_input_mem_hybrid * llm_graph_context::build_inp_mem_hybrid() const {
+lfg_graph_input_mem_hybrid * lfg_graph_context::build_inp_mem_hybrid() const {
     const auto * mctx_cur = static_cast<const lfg_memory_hybrid_context *>(mctx);
 
     auto inp_rs   = build_rs_inp_impl     (ctx0, ubatch, mctx_cur->get_recr());
     auto inp_attn = build_attn_inp_kv_impl(ctx0, ubatch, hparams, cparams, mctx_cur->get_attn());
 
-    auto inp = std::make_unique<llm_graph_input_mem_hybrid>(cparams, std::move(inp_attn), std::move(inp_rs), mctx_cur);
+    auto inp = std::make_unique<lfg_graph_input_mem_hybrid>(cparams, std::move(inp_attn), std::move(inp_rs), mctx_cur);
 
-    return (llm_graph_input_mem_hybrid *) res->add_input(std::move(inp));
+    return (lfg_graph_input_mem_hybrid *) res->add_input(std::move(inp));
 }
 
-llm_graph_input_mem_hybrid_iswa * llm_graph_context::build_inp_mem_hybrid_iswa() const {
+lfg_graph_input_mem_hybrid_iswa * lfg_graph_context::build_inp_mem_hybrid_iswa() const {
     const auto * mctx_cur = static_cast<const lfg_memory_hybrid_iswa_context *>(mctx);
 
     auto inp_rs = build_rs_inp_impl(ctx0, ubatch, mctx_cur->get_recr());
@@ -2148,7 +2148,7 @@ llm_graph_input_mem_hybrid_iswa * llm_graph_context::build_inp_mem_hybrid_iswa()
     // build iswa attention input
     const auto * attn_ctx = mctx_cur->get_attn();
 
-    auto inp_attn = std::make_unique<llm_graph_input_attn_kv_iswa>(hparams, cparams, attn_ctx);
+    auto inp_attn = std::make_unique<lfg_graph_input_attn_kv_iswa>(hparams, cparams, attn_ctx);
 
     const auto n_stream = cparams.kv_unified ? 1 : ubatch.n_seqs_unq;
 
@@ -2176,12 +2176,12 @@ llm_graph_input_mem_hybrid_iswa * llm_graph_context::build_inp_mem_hybrid_iswa()
         inp_attn->self_kq_mask_swa_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp_attn->self_kq_mask_swa, GGML_TYPE_F16) : inp_attn->self_kq_mask_swa;
     }
 
-    auto inp = std::make_unique<llm_graph_input_mem_hybrid_iswa>(cparams, std::move(inp_attn), std::move(inp_rs), mctx_cur);
+    auto inp = std::make_unique<lfg_graph_input_mem_hybrid_iswa>(cparams, std::move(inp_attn), std::move(inp_rs), mctx_cur);
 
-    return (llm_graph_input_mem_hybrid_iswa *) res->add_input(std::move(inp));
+    return (lfg_graph_input_mem_hybrid_iswa *) res->add_input(std::move(inp));
 }
 
-void llm_graph_context::build_dense_out(
+void lfg_graph_context::build_dense_out(
     ggml_tensor * dense_2,
     ggml_tensor * dense_2_b,
     ggml_tensor * dense_3) const {
@@ -2206,7 +2206,7 @@ void llm_graph_context::build_dense_out(
 }
 
 
-void llm_graph_context::build_pooling(
+void lfg_graph_context::build_pooling(
         ggml_tensor * cls,
         ggml_tensor * cls_b,
         ggml_tensor * cls_out,
@@ -2291,12 +2291,12 @@ void llm_graph_context::build_pooling(
     ggml_build_forward_expand(gf, cur);
 }
 
-void llm_graph_context::build_sampling() const {
+void lfg_graph_context::build_sampling() const {
     if (samplers.empty() || !res->t_logits) {
         return;
     }
 
-    auto inp_sampling = std::make_unique<llm_graph_input_sampling>(samplers);
+    auto inp_sampling = std::make_unique<lfg_graph_input_sampling>(samplers);
     res->add_input(std::move(inp_sampling));
 
     std::map<lfg_seq_id, int32_t> seq_to_logit_row;

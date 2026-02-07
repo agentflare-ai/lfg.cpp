@@ -173,18 +173,18 @@ static void lfg_adapter_lora_init_impl(lfg_model & model, const char * path_lora
             gguf_type type = gguf_get_kv_type(gguf_ctx, i);
             const std::string type_name =
                 type == GGUF_TYPE_ARRAY
-                ? format("%s[%s,%zu]", gguf_type_name(type), gguf_type_name(gguf_get_arr_type(gguf_ctx, i)), gguf_get_arr_n(gguf_ctx, i))
+                ? lfg_format("%s[%s,%zu]", gguf_type_name(type), gguf_type_name(gguf_get_arr_type(gguf_ctx, i)), gguf_get_arr_n(gguf_ctx, i))
                 : gguf_type_name(type);
             const char * name = gguf_get_key(gguf_ctx, i);
-            const std::string value = gguf_kv_to_str(gguf_ctx, i);
+            const std::string value = lfg_gguf_kv_to_str(gguf_ctx, i);
 
             if (type != GGUF_TYPE_ARRAY) {
                 adapter.gguf_kv.emplace(name, value);
             }
 
             const size_t MAX_VALUE_LEN = 40;
-            std::string print_value = value.size() > MAX_VALUE_LEN ? format("%s...", value.substr(0, MAX_VALUE_LEN - 3).c_str()) : value;
-            replace_all(print_value, "\n", "\\n");
+            std::string print_value = value.size() > MAX_VALUE_LEN ? lfg_format("%s...", value.substr(0, MAX_VALUE_LEN - 3).c_str()) : value;
+            lfg_replace_all(print_value, "\n", "\\n");
 
             LFG_LOG_INFO("%s: - kv %3d: %42s %-16s = %s\n", __func__, i, name, type_name.c_str(), print_value.c_str());
         }
@@ -197,28 +197,28 @@ static void lfg_adapter_lora_init_impl(lfg_model & model, const char * path_lora
             int id = static_cast<int>(gguf_find_key(gguf_ctx, key.c_str()));
             return id < 0 ? 0.0f : gguf_get_val_f32(gguf_ctx, id);
         };
-        LLM_KV llm_kv = LLM_KV(LLM_ARCH_UNKNOWN);
+        LFG_KV lfg_kv_enum = LFG_KV(LFG_ARCH_UNKNOWN);
 
-        auto general_type = get_kv_str(llm_kv(LLM_KV_GENERAL_TYPE));
+        auto general_type = get_kv_str(lfg_kv_enum(LFG_KV_GENERAL_TYPE));
         if (general_type != "adapter") {
             throw std::runtime_error("expect general.type to be 'adapter', but got: " + general_type);
         }
 
-        auto general_arch_str = get_kv_str(llm_kv(LLM_KV_GENERAL_ARCHITECTURE));
-        auto general_arch = llm_arch_from_string(general_arch_str);
+        auto general_arch_str = get_kv_str(lfg_kv_enum(LFG_KV_GENERAL_ARCHITECTURE));
+        auto general_arch = lfg_arch_from_string(general_arch_str);
         if (general_arch != model.arch) {
             throw std::runtime_error("model arch and LoRA arch mismatch");
         }
 
-        auto adapter_type = get_kv_str(llm_kv(LLM_KV_ADAPTER_TYPE));
+        auto adapter_type = get_kv_str(lfg_kv_enum(LFG_KV_ADAPTER_TYPE));
         if (adapter_type != "lora") {
             throw std::runtime_error("expect adapter.type to be 'lora', but got: " + adapter_type);
         }
 
-        adapter.alpha = get_kv_f32(llm_kv(LLM_KV_ADAPTER_LORA_ALPHA));
+        adapter.alpha = get_kv_f32(lfg_kv_enum(LFG_KV_ADAPTER_LORA_ALPHA));
 
         // parse alora invocation sequence vector
-        const auto & key = llm_kv(LLM_KV_ADAPTER_ALORA_INVOCATION_TOKENS);
+        const auto & key = lfg_kv_enum(LFG_KV_ADAPTER_ALORA_INVOCATION_TOKENS);
         const int kid = static_cast<int>(gguf_find_key(ctx_gguf.get(), key.c_str()));
         if (kid >= 0) {
             if (gguf_get_kv_type(ctx_gguf.get(), kid) != GGUF_TYPE_ARRAY) {
@@ -271,14 +271,14 @@ static void lfg_adapter_lora_init_impl(lfg_model & model, const char * path_lora
     for (ggml_tensor * cur = ggml_get_first_tensor(ctx.get()); cur; cur = ggml_get_next_tensor(ctx.get(), cur)) {
         std::string name(cur->name);
         if (str_endswith(name, ".lora_a")) {
-            replace_all(name, ".lora_a", "");
+            lfg_replace_all(name, ".lora_a", "");
             if (ab_map.find(name) == ab_map.end()) {
                 ab_map[name] = lfg_adapter_lora_weight(cur, nullptr);
             } else {
                 ab_map[name].a = cur;
             }
         } else if (str_endswith(name, ".lora_b")) {
-            replace_all(name, ".lora_b", "");
+            lfg_replace_all(name, ".lora_b", "");
             if (ab_map.find(name) == ab_map.end()) {
                 ab_map[name] = lfg_adapter_lora_weight(nullptr, cur);
             } else {
@@ -300,7 +300,7 @@ static void lfg_adapter_lora_init_impl(lfg_model & model, const char * path_lora
     {
         auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
         if (!cpu_dev) {
-            throw std::runtime_error(format("%s: no CPU backend found", __func__));
+            throw std::runtime_error(lfg_format("%s: no CPU backend found", __func__));
         }
         auto * cpu_reg = ggml_backend_dev_backend_reg(cpu_dev);
 
@@ -341,7 +341,7 @@ static void lfg_adapter_lora_init_impl(lfg_model & model, const char * path_lora
 
                 auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
                 if (!cpu_dev) {
-                    throw std::runtime_error(format("%s: no CPU backend found", __func__));
+                    throw std::runtime_error(lfg_format("%s: no CPU backend found", __func__));
                 }
                 buft = ggml_backend_dev_buffer_type(cpu_dev);
 

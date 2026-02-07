@@ -6,11 +6,11 @@
 #include "../lfg_memory_hybrid.h"
 
 template <bool iswa>
-lfg_build_lfm2<iswa>::lfg_build_lfm2(const lfg_model & model, const llm_graph_params & params) :
-    llm_graph_context(params),
+lfg_build_lfm2<iswa>::lfg_build_lfm2(const lfg_model & model, const lfg_graph_params & params) :
+    lfg_graph_context(params),
     model(model) {
-    using inp_hybrid_type = std::conditional_t<iswa, llm_graph_input_mem_hybrid_iswa, llm_graph_input_mem_hybrid>;
-    using inp_attn_type   = std::conditional_t<iswa, llm_graph_input_attn_kv_iswa, llm_graph_input_attn_kv>;
+    using inp_hybrid_type = std::conditional_t<iswa, lfg_graph_input_mem_hybrid_iswa, lfg_graph_input_mem_hybrid>;
+    using inp_attn_type   = std::conditional_t<iswa, lfg_graph_input_attn_kv_iswa, lfg_graph_input_attn_kv>;
 
     inp_hybrid_type * inp_hybrid = nullptr;
     inp_attn_type   * inp_attn   = nullptr;
@@ -35,7 +35,7 @@ lfg_build_lfm2<iswa>::lfg_build_lfm2(const lfg_model & model, const llm_graph_pa
         const bool is_moe_layer = il >= hparams.n_layer_dense_lead;
 
         auto * prev_cur = cur;
-        cur             = build_norm(cur, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
+        cur             = build_norm(cur, model.layers[il].attn_norm, NULL, LFG_NORM_RMS, il);
         cb(cur, "model.layers.{}.operator_norm", il);
 
         cur = hparams.is_recurrent(il) ? build_shortconv_block(cur, inp_hybrid->get_recr(), il) :
@@ -48,7 +48,7 @@ lfg_build_lfm2<iswa>::lfg_build_lfm2(const lfg_model & model, const llm_graph_pa
 
         cur = ggml_add(ctx0, prev_cur, cur);
 
-        auto * ffn_norm_out = build_norm(cur, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, il);
+        auto * ffn_norm_out = build_norm(cur, model.layers[il].ffn_norm, NULL, LFG_NORM_RMS, il);
         cb(ffn_norm_out, "model.layers.{}.ffn_norm", il);
 
         ggml_tensor * ffn_out =
@@ -58,7 +58,7 @@ lfg_build_lfm2<iswa>::lfg_build_lfm2(const lfg_model & model, const llm_graph_pa
         cur = ggml_add(ctx0, cur, ffn_out);
     }
 
-    cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
+    cur = build_norm(cur, model.output_norm, NULL, LFG_NORM_RMS, -1);
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
@@ -73,7 +73,7 @@ lfg_build_lfm2<iswa>::lfg_build_lfm2(const lfg_model & model, const llm_graph_pa
 template <bool iswa> ggml_tensor * lfg_build_lfm2<iswa>::build_moe_feed_forward(ggml_tensor * cur, int il) const {
     return build_moe_ffn(cur, model.layers[il].ffn_gate_inp, model.layers[il].ffn_up_exps,
                          model.layers[il].ffn_gate_exps, model.layers[il].ffn_down_exps,
-                         model.layers[il].ffn_exp_probs_b, n_expert, n_expert_used, LLM_FFN_SILU, true, false, 0.0,
+                         model.layers[il].ffn_exp_probs_b, n_expert, n_expert_used, LFG_FFN_SILU, true, false, 0.0,
                          static_cast<lfg_expert_gating_func_type>(hparams.expert_gating_func), il);
 }
 
@@ -82,14 +82,14 @@ template <bool iswa> ggml_tensor * lfg_build_lfm2<iswa>::build_dense_feed_forwar
     GGML_ASSERT(!model.layers[il].ffn_gate_b);
     GGML_ASSERT(!model.layers[il].ffn_down_b);
     return build_ffn(cur, model.layers[il].ffn_up, NULL, NULL, model.layers[il].ffn_gate, NULL, NULL,
-                     model.layers[il].ffn_down, NULL, NULL, NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
+                     model.layers[il].ffn_down, NULL, NULL, NULL, LFG_FFN_SILU, LFG_FFN_PAR, il);
 }
 
 template <bool iswa>
 ggml_tensor * lfg_build_lfm2<iswa>::build_attn_block(
     ggml_tensor *                                                                     cur,
     ggml_tensor *                                                                     inp_pos,
-    std::conditional_t<iswa, llm_graph_input_attn_kv_iswa, llm_graph_input_attn_kv> * inp_attn,
+    std::conditional_t<iswa, lfg_graph_input_attn_kv_iswa, lfg_graph_input_attn_kv> * inp_attn,
     int                                                                               il) const {
     GGML_ASSERT(hparams.n_embd_v_gqa(il) == hparams.n_embd_k_gqa(il));
     const auto n_embd_head = hparams.n_embd_head_v;
@@ -107,9 +107,9 @@ ggml_tensor * lfg_build_lfm2<iswa>::build_attn_block(
     v = ggml_reshape_3d(ctx0, v, n_embd_head, n_head_kv, n_tokens);
 
     // qk norm
-    q = build_norm(q, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, il);
+    q = build_norm(q, model.layers[il].attn_q_norm, NULL, LFG_NORM_RMS, il);
     cb(q, "model.layers.{}.self_attn.q_layernorm", il);
-    k = build_norm(k, model.layers[il].attn_k_norm, NULL, LLM_NORM_RMS, il);
+    k = build_norm(k, model.layers[il].attn_k_norm, NULL, LFG_NORM_RMS, il);
     cb(k, "model.layers.{}.self_attn.k_layernorm", il);
 
     // RoPE
@@ -127,7 +127,7 @@ ggml_tensor * lfg_build_lfm2<iswa>::build_attn_block(
 }
 
 template <bool iswa>
-ggml_tensor * lfg_build_lfm2<iswa>::build_shortconv_block(ggml_tensor * cur, llm_graph_input_rs * inp_recr, int il) {
+ggml_tensor * lfg_build_lfm2<iswa>::build_shortconv_block(ggml_tensor * cur, lfg_graph_input_rs * inp_recr, int il) {
     const lfg_memory_recurrent_context * mctx_cur;
     if constexpr (iswa) {
         mctx_cur = static_cast<const lfg_memory_hybrid_iswa_context *>(mctx)->get_recr();

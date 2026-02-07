@@ -36,6 +36,7 @@ typedef struct lfg_session_config {
     bool enable_healing;
     bool structured_checkpointing; // Snapshot sampler state for structured decoding.
     int reasoning_budget;          // 0 = disabled. Number of tokens allowed for reasoning.
+    int32_t max_tokens;            // 0 = unlimited. Max tokens to generate per reset cycle.
     lfg_sampling_config sampling;
 } lfg_session_config;
 
@@ -66,6 +67,15 @@ LFG_API int32_t lfg_json_schema_to_grammar(const char * json_schema,
                                                  bool force_gbnf,
                                                  char * buf,
                                                  size_t buf_size);
+
+// Configure stop sequences. Generation returns EOS when any sequence matches.
+// Each sequence is an array of tokens; pass arrays of pointers and lengths.
+// Pass n_sequences == 0 to clear. Returns false on invalid arguments.
+LFG_API bool lfg_session_configure_stop_sequences(
+    lfg_session * session,
+    const lfg_token * const * sequences,
+    const size_t * sequence_lengths,
+    size_t n_sequences);
 
 // Token ingestion / decoding.
 LFG_API bool lfg_session_ingest_tokens(lfg_session * session,

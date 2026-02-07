@@ -125,9 +125,9 @@ struct lfg_context {
     // if memory_context is provided, it will be applied first to the context's memory
     // ret contains the status of the graph computation
     // returns nullptr only if ret != GGML_STATUS_SUCCESS
-    llm_graph_result * process_ubatch(
+    lfg_graph_result * process_ubatch(
                 const lfg_ubatch & ubatch,
-                    llm_graph_type   gtype,
+                    lfg_graph_type   gtype,
             lfg_memory_context_i * mctx,
                        ggml_status & ret);
 
@@ -227,8 +227,8 @@ private:
 public:
     uint32_t graph_max_nodes(uint32_t n_tokens) const;
 
-    // can reuse the llm_graph_result instance of the context (for example to update a memory module)
-    llm_graph_result * get_gf_res_reserve() const;
+    // can reuse the lfg_graph_result instance of the context (for example to update a memory module)
+    lfg_graph_result * get_gf_res_reserve() const;
 
     // returns the result of ggml_backend_sched_graph_compute_async execution
     ggml_status graph_compute(ggml_cgraph * gf, bool batched);
@@ -240,13 +240,13 @@ public:
     bool set_sampler(lfg_seq_id seq_id, lfg_sampler * sampler);
 
 private:
-    llm_graph_params graph_params(
-                        llm_graph_result * res,
+    lfg_graph_params graph_params(
+                        lfg_graph_result * res,
                       const lfg_ubatch & ubatch,
             const lfg_memory_context_i * mctx,
-                          llm_graph_type   gtype) const;
+                          lfg_graph_type   gtype) const;
 
-    llm_graph_cb graph_get_cb() const;
+    lfg_graph_cb graph_get_cb() const;
 
     // TODO: read/write lora adapters and cvec
     size_t state_write_data(lfg_io_write_i & io);
@@ -344,8 +344,8 @@ private:
     std::vector<ggml_backend_buffer_type_t> backend_buft;
     std::vector<size_t>                     backend_buf_exp_size; // expected buffer sizes
 
-    llm_graph_result_ptr gf_res_prev;
-    llm_graph_result_ptr gf_res_reserve;
+    lfg_graph_result_ptr gf_res_prev;
+    lfg_graph_result_ptr gf_res_reserve;
 
     // host buffer for the model output (logits and embeddings)
     ggml_backend_buffer_ptr buf_output;

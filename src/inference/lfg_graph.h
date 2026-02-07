@@ -29,32 +29,32 @@ class lfg_memory_hybrid_iswa_context;
 
 
 // certain models (typically multi-modal) can produce different types of graphs
-enum llm_graph_type {
-    LLM_GRAPH_TYPE_DEFAULT,
-    LLM_GRAPH_TYPE_ENCODER,
-    LLM_GRAPH_TYPE_DECODER,
+enum lfg_graph_type {
+    LFG_GRAPH_TYPE_DEFAULT,
+    LFG_GRAPH_TYPE_ENCODER,
+    LFG_GRAPH_TYPE_DECODER,
 };
 
-enum llm_ffn_op_type {
-    LLM_FFN_SILU,
-    LLM_FFN_GELU,
-    LLM_FFN_RELU,
-    LLM_FFN_RELU_SQR,
-    LLM_FFN_SWIGLU,
-    LLM_FFN_GEGLU,
-    LLM_FFN_REGLU,
-    LLM_FFN_SWIGLU_OAI_MOE,
+enum lfg_ffn_op_type {
+    LFG_FFN_SILU,
+    LFG_FFN_GELU,
+    LFG_FFN_RELU,
+    LFG_FFN_RELU_SQR,
+    LFG_FFN_SWIGLU,
+    LFG_FFN_GEGLU,
+    LFG_FFN_REGLU,
+    LFG_FFN_SWIGLU_OAI_MOE,
 };
 
-enum llm_ffn_gate_type {
-    LLM_FFN_SEQ,
-    LLM_FFN_PAR, // ffn_gate is parallel to ffn_up
+enum lfg_ffn_gate_type {
+    LFG_FFN_SEQ,
+    LFG_FFN_PAR, // ffn_gate is parallel to ffn_up
 };
 
-enum llm_norm_type {
-    LLM_NORM,
-    LLM_NORM_RMS,
-    LLM_NORM_GROUP,
+enum lfg_norm_type {
+    LFG_NORM,
+    LFG_NORM_RMS,
+    LFG_NORM_GROUP,
 };
 
 // TODO: tmp - need something better to pass the data from the encoder to the decoder
@@ -74,26 +74,26 @@ struct lfg_cross {
     std::vector<std::set<lfg_seq_id>> seq_ids_enc;
 };
 
-struct llm_graph_params;
+struct lfg_graph_params;
 
 //
-// llm_graph_input
+// lfg_graph_input
 //
 
-class llm_graph_input_i {
+class lfg_graph_input_i {
 public:
-    llm_graph_input_i() {
+    lfg_graph_input_i() {
         const char * LFG_GRAPH_INPUT_DEBUG = getenv("LFG_GRAPH_INPUT_DEBUG");
         debug = LFG_GRAPH_INPUT_DEBUG ? atoi(LFG_GRAPH_INPUT_DEBUG) : 0;
     }
 
-    virtual ~llm_graph_input_i() = default;
+    virtual ~lfg_graph_input_i() = default;
 
     virtual void set_input(const lfg_ubatch * ubatch) = 0;
 
     // return true if the resulting input tensors using the provided graph parameters would be
     //   the same as the previous input tensors that we have currently stored in the object
-    virtual bool can_reuse(const llm_graph_params & params) {
+    virtual bool can_reuse(const lfg_graph_params & params) {
         // returning false here by default will prevent from reusing the graph if the check
         //   for the input type has not been implemented yet
         GGML_UNUSED(params);
@@ -104,29 +104,29 @@ protected:
     int debug = 0;
 };
 
-using llm_graph_input_ptr = std::unique_ptr<llm_graph_input_i>;
+using lfg_graph_input_ptr = std::unique_ptr<lfg_graph_input_i>;
 
-class llm_graph_input_embd : public llm_graph_input_i {
+class lfg_graph_input_embd : public lfg_graph_input_i {
 public:
-    llm_graph_input_embd()          = default;
-    virtual ~llm_graph_input_embd() = default;
+    lfg_graph_input_embd()          = default;
+    virtual ~lfg_graph_input_embd() = default;
 
     void set_input(const lfg_ubatch * ubatch) override;
 
-    bool can_reuse(const llm_graph_params & params) override;
+    bool can_reuse(const lfg_graph_params & params) override;
 
     ggml_tensor * tokens = nullptr; // I32 [n_batch]
     ggml_tensor * embd   = nullptr; // F32 [n_embd, n_batch]
 };
 
-class llm_graph_input_pos : public llm_graph_input_i {
+class lfg_graph_input_pos : public lfg_graph_input_i {
 public:
-    llm_graph_input_pos(uint32_t n_pos_per_embd) : n_pos_per_embd(n_pos_per_embd) {}
-    virtual ~llm_graph_input_pos() = default;
+    lfg_graph_input_pos(uint32_t n_pos_per_embd) : n_pos_per_embd(n_pos_per_embd) {}
+    virtual ~lfg_graph_input_pos() = default;
 
     void set_input(const lfg_ubatch * ubatch) override;
 
-    bool can_reuse(const llm_graph_params & params) override;
+    bool can_reuse(const lfg_graph_params & params) override;
 
     ggml_tensor * pos = nullptr; // I32 [n_batch]
 
@@ -134,11 +134,11 @@ public:
 };
 
 // temperature tuning, used by liquid4
-class llm_graph_input_attn_temp : public llm_graph_input_i {
+class lfg_graph_input_attn_temp : public lfg_graph_input_i {
 public:
-    llm_graph_input_attn_temp(uint32_t n_attn_temp_floor_scale, float f_attn_temp_scale, float f_attn_temp_offset)
+    lfg_graph_input_attn_temp(uint32_t n_attn_temp_floor_scale, float f_attn_temp_scale, float f_attn_temp_offset)
         : n_attn_temp_floor_scale(n_attn_temp_floor_scale), f_attn_temp_scale(f_attn_temp_scale), f_attn_temp_offset(f_attn_temp_offset) {}
-    virtual ~llm_graph_input_attn_temp() = default;
+    virtual ~lfg_graph_input_attn_temp() = default;
 
     void set_input(const lfg_ubatch * ubatch) override;
 
@@ -149,10 +149,10 @@ public:
     const float    f_attn_temp_offset;
 };
 
-class llm_graph_input_pos_bucket : public llm_graph_input_i {
+class lfg_graph_input_pos_bucket : public lfg_graph_input_i {
 public:
-    llm_graph_input_pos_bucket(const lfg_hparams & hparams) : hparams(hparams) {}
-    virtual ~llm_graph_input_pos_bucket() = default;
+    lfg_graph_input_pos_bucket(const lfg_hparams & hparams) : hparams(hparams) {}
+    virtual ~lfg_graph_input_pos_bucket() = default;
 
     void set_input(const lfg_ubatch * ubatch) override;
 
@@ -161,12 +161,12 @@ public:
     const lfg_hparams hparams;
 };
 
-class llm_graph_input_pos_bucket_kv : public llm_graph_input_i {
+class lfg_graph_input_pos_bucket_kv : public lfg_graph_input_i {
 public:
-    llm_graph_input_pos_bucket_kv(
+    lfg_graph_input_pos_bucket_kv(
             const lfg_hparams & hparams,
             const lfg_kv_cache_context * mctx) : hparams(hparams), mctx(mctx) {}
-    virtual ~llm_graph_input_pos_bucket_kv() = default;
+    virtual ~lfg_graph_input_pos_bucket_kv() = default;
 
     void set_input(const lfg_ubatch * ubatch) override;
 
@@ -177,17 +177,17 @@ public:
     const lfg_kv_cache_context * mctx;
 };
 
-class llm_graph_input_out_ids : public llm_graph_input_i {
+class lfg_graph_input_out_ids : public lfg_graph_input_i {
 public:
-    llm_graph_input_out_ids(
+    lfg_graph_input_out_ids(
             const lfg_hparams & hparams,
             const lfg_cparams & cparams,
             uint32_t n_outputs) : hparams(hparams), cparams(cparams), n_outputs(n_outputs) {}
-    virtual ~llm_graph_input_out_ids() = default;
+    virtual ~lfg_graph_input_out_ids() = default;
 
     void set_input(const lfg_ubatch * ubatch) override;
 
-    bool can_reuse(const llm_graph_params & params) override;
+    bool can_reuse(const lfg_graph_params & params) override;
 
     ggml_tensor * out_ids; // I32 [n_outputs]
 
@@ -197,10 +197,10 @@ public:
     const uint32_t n_outputs;
 };
 
-class llm_graph_input_mean : public llm_graph_input_i {
+class lfg_graph_input_mean : public lfg_graph_input_i {
 public:
-    llm_graph_input_mean(const lfg_cparams & cparams) : cparams(cparams) {}
-    virtual ~llm_graph_input_mean() = default;
+    lfg_graph_input_mean(const lfg_cparams & cparams) : cparams(cparams) {}
+    virtual ~lfg_graph_input_mean() = default;
 
     void set_input(const lfg_ubatch * ubatch) override;
 
@@ -209,27 +209,27 @@ public:
     const lfg_cparams cparams;
 };
 
-class llm_graph_input_cls : public llm_graph_input_i {
+class lfg_graph_input_cls : public lfg_graph_input_i {
 public:
-    llm_graph_input_cls(const lfg_cparams & cparams, const llm_arch arch) : cparams(cparams), arch(arch) {}
-    virtual ~llm_graph_input_cls() = default;
+    lfg_graph_input_cls(const lfg_cparams & cparams, const lfg_arch_enum arch) : cparams(cparams), arch(arch) {}
+    virtual ~lfg_graph_input_cls() = default;
 
     void set_input(const lfg_ubatch * ubatch) override;
 
     ggml_tensor * cls; // I32 [n_batch]
 
     const lfg_cparams cparams;
-    const llm_arch arch;
+    const lfg_arch_enum arch;
 };
 
-class llm_graph_input_rs : public llm_graph_input_i {
+class lfg_graph_input_rs : public lfg_graph_input_i {
 public:
-    llm_graph_input_rs(const lfg_memory_recurrent_context * mctx) : mctx(mctx) {}
-    virtual ~llm_graph_input_rs() = default;
+    lfg_graph_input_rs(const lfg_memory_recurrent_context * mctx) : mctx(mctx) {}
+    virtual ~lfg_graph_input_rs() = default;
 
     void set_input(const lfg_ubatch * ubatch) override;
 
-    bool can_reuse(const llm_graph_params & params) override;
+    bool can_reuse(const lfg_graph_params & params) override;
 
     ggml_tensor * s_copy;  // I32 [n_rs]
 
@@ -245,11 +245,11 @@ public:
     int32_t rs_z;
 };
 
-class llm_graph_input_cross_embd : public llm_graph_input_i {
+class lfg_graph_input_cross_embd : public lfg_graph_input_i {
 public:
-    llm_graph_input_cross_embd(
+    lfg_graph_input_cross_embd(
             const lfg_cross * cross) : cross(cross) {}
-    virtual ~llm_graph_input_cross_embd() = default;
+    virtual ~lfg_graph_input_cross_embd() = default;
 
     void set_input(const lfg_ubatch * ubatch) override;
 
@@ -258,13 +258,13 @@ public:
     const lfg_cross * cross;
 };
 
-class llm_graph_input_attn_no_cache : public llm_graph_input_i {
+class lfg_graph_input_attn_no_cache : public lfg_graph_input_i {
 public:
-    llm_graph_input_attn_no_cache(const lfg_hparams & hparams, const lfg_cparams & cparams) :
+    lfg_graph_input_attn_no_cache(const lfg_hparams & hparams, const lfg_cparams & cparams) :
         hparams(hparams),
         cparams(cparams) {
     }
-    ~llm_graph_input_attn_no_cache() = default;
+    ~lfg_graph_input_attn_no_cache() = default;
 
     void set_input(const lfg_ubatch * ubatch) override;
 
@@ -281,9 +281,9 @@ public:
     const lfg_cparams cparams;
 };
 
-class llm_graph_input_attn_kv : public llm_graph_input_i {
+class lfg_graph_input_attn_kv : public lfg_graph_input_i {
 public:
-    llm_graph_input_attn_kv(
+    lfg_graph_input_attn_kv(
             const lfg_hparams & hparams,
             const lfg_cparams & cparams,
             const lfg_kv_cache_context * mctx) :
@@ -291,11 +291,11 @@ public:
         cparams(cparams),
         mctx(mctx) {
     }
-    ~llm_graph_input_attn_kv() = default;
+    ~lfg_graph_input_attn_kv() = default;
 
     void set_input(const lfg_ubatch * ubatch) override;
 
-    bool can_reuse(const llm_graph_params & params) override;
+    bool can_reuse(const lfg_graph_params & params) override;
 
     ggml_tensor * get_k_idxs() const { return self_k_idxs; }
     ggml_tensor * get_v_idxs() const { return self_v_idxs; }
@@ -310,16 +310,16 @@ public:
 
     // note: these have to be copies because in order to be able to reuse a graph, its inputs
     //       need to carry these parameters with them. otherwise, they can point to freed
-    //       llm_graph_params from a previous batch, causing stack-use-after-return
+    //       lfg_graph_params from a previous batch, causing stack-use-after-return
     const lfg_hparams hparams;
     const lfg_cparams cparams;
 
     const lfg_kv_cache_context * mctx;
 };
 
-class llm_graph_input_attn_kv_iswa : public llm_graph_input_i {
+class lfg_graph_input_attn_kv_iswa : public lfg_graph_input_i {
 public:
-    llm_graph_input_attn_kv_iswa(
+    lfg_graph_input_attn_kv_iswa(
             const lfg_hparams & hparams,
             const lfg_cparams & cparams,
             const lfg_kv_cache_iswa_context * mctx) :
@@ -327,11 +327,11 @@ public:
         cparams(cparams),
         mctx(mctx) {
     }
-    ~llm_graph_input_attn_kv_iswa() = default;
+    ~lfg_graph_input_attn_kv_iswa() = default;
 
     void set_input(const lfg_ubatch * ubatch) override;
 
-    bool can_reuse(const llm_graph_params & params) override;
+    bool can_reuse(const lfg_graph_params & params) override;
 
     ggml_tensor * get_k_idxs()     const { return self_k_idxs; }
     ggml_tensor * get_v_idxs()     const { return self_v_idxs; }
@@ -357,10 +357,10 @@ public:
     const lfg_kv_cache_iswa_context * mctx;
 };
 
-class llm_graph_input_attn_cross : public llm_graph_input_i {
+class lfg_graph_input_attn_cross : public lfg_graph_input_i {
 public:
-    llm_graph_input_attn_cross(const lfg_cross * cross) : cross(cross) {}
-    ~llm_graph_input_attn_cross() = default;
+    lfg_graph_input_attn_cross(const lfg_cross * cross) : cross(cross) {}
+    ~lfg_graph_input_attn_cross() = default;
 
     void set_input(const lfg_ubatch * ubatch) override;
 
@@ -372,76 +372,76 @@ public:
     const lfg_cross * cross = nullptr;
 };
 
-class llm_graph_input_mem_hybrid : public llm_graph_input_i {
+class lfg_graph_input_mem_hybrid : public lfg_graph_input_i {
 public:
-    llm_graph_input_mem_hybrid(
+    lfg_graph_input_mem_hybrid(
             const lfg_cparams & cparams,
-            std::unique_ptr<llm_graph_input_attn_kv> inp_attn,
-            std::unique_ptr<llm_graph_input_rs>      inp_rs,
+            std::unique_ptr<lfg_graph_input_attn_kv> inp_attn,
+            std::unique_ptr<lfg_graph_input_rs>      inp_rs,
             const lfg_memory_hybrid_context *      mctx) :
         inp_attn(std::move(inp_attn)),
         inp_rs(std::move(inp_rs)),
         cparams(cparams),
         mctx(mctx) { }
-    virtual ~llm_graph_input_mem_hybrid() = default;
+    virtual ~lfg_graph_input_mem_hybrid() = default;
 
     void set_input(const lfg_ubatch * ubatch) override;
 
-    bool can_reuse(const llm_graph_params & params) override;
+    bool can_reuse(const lfg_graph_params & params) override;
 
-    std::unique_ptr<llm_graph_input_attn_kv> inp_attn;
-    std::unique_ptr<llm_graph_input_rs>      inp_rs;
+    std::unique_ptr<lfg_graph_input_attn_kv> inp_attn;
+    std::unique_ptr<lfg_graph_input_rs>      inp_rs;
 
-    llm_graph_input_attn_kv * get_attn() const { return inp_attn.get(); }
-    llm_graph_input_rs      * get_recr() const { return inp_rs.get(); }
+    lfg_graph_input_attn_kv * get_attn() const { return inp_attn.get(); }
+    lfg_graph_input_rs      * get_recr() const { return inp_rs.get(); }
 
     const lfg_cparams cparams;
 
     const lfg_memory_hybrid_context * mctx;
 };
 
-class llm_graph_input_mem_hybrid_iswa : public llm_graph_input_i {
+class lfg_graph_input_mem_hybrid_iswa : public lfg_graph_input_i {
 public:
-    llm_graph_input_mem_hybrid_iswa(
+    lfg_graph_input_mem_hybrid_iswa(
             const lfg_cparams & cparams,
-            std::unique_ptr<llm_graph_input_attn_kv_iswa> inp_attn,
-            std::unique_ptr<llm_graph_input_rs>          inp_rs,
+            std::unique_ptr<lfg_graph_input_attn_kv_iswa> inp_attn,
+            std::unique_ptr<lfg_graph_input_rs>          inp_rs,
             const lfg_memory_hybrid_iswa_context *     mctx) :
         inp_attn(std::move(inp_attn)),
         inp_rs(std::move(inp_rs)),
         cparams(cparams),
         mctx(mctx) { }
-    virtual ~llm_graph_input_mem_hybrid_iswa() = default;
+    virtual ~lfg_graph_input_mem_hybrid_iswa() = default;
 
     void set_input(const lfg_ubatch * ubatch) override;
 
-    bool can_reuse(const llm_graph_params & params) override;
+    bool can_reuse(const lfg_graph_params & params) override;
 
-    std::unique_ptr<llm_graph_input_attn_kv_iswa> inp_attn;
-    std::unique_ptr<llm_graph_input_rs>          inp_rs;
+    std::unique_ptr<lfg_graph_input_attn_kv_iswa> inp_attn;
+    std::unique_ptr<lfg_graph_input_rs>          inp_rs;
 
-    llm_graph_input_attn_kv_iswa * get_attn() const { return inp_attn.get(); }
-    llm_graph_input_rs           * get_recr() const { return inp_rs.get(); }
+    lfg_graph_input_attn_kv_iswa * get_attn() const { return inp_attn.get(); }
+    lfg_graph_input_rs           * get_recr() const { return inp_rs.get(); }
 
     const lfg_cparams cparams;
 
     const lfg_memory_hybrid_iswa_context * mctx;
 };
 
-class llm_graph_input_sampling : public llm_graph_input_i {
+class lfg_graph_input_sampling : public lfg_graph_input_i {
 public:
-    llm_graph_input_sampling(std::map<lfg_seq_id, lfg_sampler *> samplers) :
+    lfg_graph_input_sampling(std::map<lfg_seq_id, lfg_sampler *> samplers) :
         samplers(std::move(samplers)) { }
-    virtual ~llm_graph_input_sampling() = default;
+    virtual ~lfg_graph_input_sampling() = default;
 
     void set_input(const lfg_ubatch * ubatch) override;
-    bool can_reuse(const llm_graph_params & params) override;
+    bool can_reuse(const lfg_graph_params & params) override;
 
     std::map<lfg_seq_id, lfg_sampler *> samplers;
 };
 
 //
-// llm_graph_result
+// lfg_graph_result
 //
 
 // these objects deliver the result from the graph build process back to the lfg_context
@@ -451,19 +451,19 @@ public:
 //   these are used by the lfg_context to extact the relevant data, based on the compute parameters
 
 // callback that allows us to apply custom logic to each tensor (e.g. ggml-alloc, offloading, etc.)
-using llm_graph_cb = std::function<void(const lfg_ubatch & ubatch, ggml_tensor * cur, const char * name, int il)>;
+using lfg_graph_cb = std::function<void(const lfg_ubatch & ubatch, ggml_tensor * cur, const char * name, int il)>;
 
-class llm_graph_result;
+class lfg_graph_result;
 
-struct llm_graph_params {
-    llm_arch arch = LLM_ARCH_UNKNOWN;
+struct lfg_graph_params {
+    lfg_arch_enum arch = LFG_ARCH_UNKNOWN;
 
     lfg_hparams hparams;
     lfg_cparams cparams;
 
     lfg_ubatch ubatch; // note: intentionally make a copy
 
-    llm_graph_type gtype;
+    lfg_graph_type gtype;
 
     ggml_backend_sched_t sched;
     ggml_backend_t backend_cpu;
@@ -492,13 +492,13 @@ struct llm_graph_params {
 
     uint32_t n_outputs;
 
-    llm_graph_cb cb;
+    lfg_graph_cb cb;
 
-    llm_graph_result * res;
+    lfg_graph_result * res;
 
     // return true if the "other" params would result in a graph with the same topology as with the current params
     //   having the same topology allows us to reuse the graph in some cases
-    bool allow_reuse(const llm_graph_params & other) const {
+    bool allow_reuse(const lfg_graph_params & other) const {
         // first check the ubatch
         bool can_reuse_ubatch =
             ubatch.equal_seqs() == other.ubatch.equal_seqs() &&
@@ -562,11 +562,11 @@ struct llm_graph_params {
     }
 };
 
-class llm_graph_result {
+class lfg_graph_result {
 public:
-    llm_graph_result(int64_t max_nodes);
+    lfg_graph_result(int64_t max_nodes);
 
-    virtual ~llm_graph_result() = default;
+    virtual ~lfg_graph_result() = default;
 
     ggml_tensor * get_tokens()      const { return t_tokens; }
     ggml_tensor * get_logits()      const { return t_logits; }
@@ -588,11 +588,11 @@ public:
     //   would be identical to the existing graph. in that case, we simply have to update the memory
     //   contexts of the input tensors of the graph and we can reuse it for another computation
     // return true if the graph was updated and can be reused
-    bool can_reuse(const llm_graph_params & params);
+    bool can_reuse(const lfg_graph_params & params);
 
-    llm_graph_input_i * add_input(llm_graph_input_ptr input);
+    lfg_graph_input_i * add_input(lfg_graph_input_ptr input);
 
-    void set_params(const llm_graph_params & params);
+    void set_params(const lfg_graph_params & params);
 
     // important graph nodes
     ggml_tensor * t_tokens      = nullptr;
@@ -605,7 +605,7 @@ public:
     std::map<lfg_seq_id, ggml_tensor*> t_sampled;
     std::map<lfg_seq_id, ggml_tensor*> t_sampled_probs;
 
-    std::vector<llm_graph_input_ptr> inputs;
+    std::vector<lfg_graph_input_ptr> inputs;
 
     ggml_context_ptr ctx_compute;
 
@@ -620,23 +620,23 @@ private:
     // keep a copy of the previous graph parameters
     // we will use this to determine whether the graph can be reused by comparing them with the new parameters
     // note: these are updated after constructing the new graph
-    llm_graph_params params;
+    lfg_graph_params params;
 
     // env: LFG_GRAPH_RESULT_DEBUG
     int debug = 0;
 };
 
-using llm_graph_result_ptr = std::unique_ptr<llm_graph_result>;
+using lfg_graph_result_ptr = std::unique_ptr<lfg_graph_result>;
 
 //
-// llm_graph_context
+// lfg_graph_context
 //
 
 // used in build_rs to properly order writes and avoid unnecessary copies
-using llm_graph_get_rows_fn = std::function<ggml_tensor * (ggml_context *, ggml_tensor * states, ggml_tensor * ids)>;
+using lfg_graph_get_rows_fn = std::function<ggml_tensor * (ggml_context *, ggml_tensor * states, ggml_tensor * ids)>;
 
-struct llm_graph_context {
-    const llm_arch arch;
+struct lfg_graph_context {
+    const lfg_arch_enum arch;
 
     const lfg_hparams & hparams;
     const lfg_cparams & cparams;
@@ -682,15 +682,15 @@ struct llm_graph_context {
 
     std::map<lfg_seq_id, lfg_sampler *> samplers;
 
-    const llm_graph_cb & cb_func;
+    const lfg_graph_cb & cb_func;
 
-    llm_graph_result * res;
+    lfg_graph_result * res;
 
     ggml_context * ctx0 = nullptr;
     ggml_cgraph  * gf   = nullptr;
 
-    llm_graph_context(const llm_graph_params & params);
-    virtual ~llm_graph_context() = default;
+    lfg_graph_context(const lfg_graph_params & params);
+    virtual ~lfg_graph_context() = default;
 
     void cb(ggml_tensor * cur, const char * name, int il) const;
 
@@ -717,7 +717,7 @@ struct llm_graph_context {
              ggml_tensor * cur,
              ggml_tensor * mw,
              ggml_tensor * mb,
-           llm_norm_type   type,
+           lfg_norm_type   type,
                      int   il) const;
 
     ggml_tensor * build_ffn(
@@ -732,8 +732,8 @@ struct llm_graph_context {
              ggml_tensor * down_b,
              ggml_tensor * down_s,
              ggml_tensor * act_scales,
-         llm_ffn_op_type   type_op,
-       llm_ffn_gate_type   type_gate,
+         lfg_ffn_op_type   type_op,
+       lfg_ffn_gate_type   type_gate,
                      int   il) const;
 
     // build MoE FFN without bias tensors
@@ -746,7 +746,7 @@ struct llm_graph_context {
              ggml_tensor * exp_probs_b,
                  int64_t   n_expert,
                  int64_t   n_expert_used,
-         llm_ffn_op_type   type_op,
+         lfg_ffn_op_type   type_op,
                     bool   norm_w,
                     bool   scale_w,
                    float   w_scale,
@@ -767,7 +767,7 @@ struct llm_graph_context {
              ggml_tensor * exp_probs_b,
                  int64_t   n_expert,
                  int64_t   n_expert_used,
-         llm_ffn_op_type   type_op,
+         lfg_ffn_op_type   type_op,
                     bool   norm_w,
                     bool   scale_w,
                    float   w_scale,
@@ -808,10 +808,10 @@ struct llm_graph_context {
             ggml_tensor * inp_pos = nullptr,
                    bool   use_rope = false) const;
 
-    llm_graph_input_attn_no_cache * build_attn_inp_no_cache() const;
+    lfg_graph_input_attn_no_cache * build_attn_inp_no_cache() const;
 
     ggml_tensor * build_attn(
-            llm_graph_input_attn_no_cache * inp,
+            lfg_graph_input_attn_no_cache * inp,
             ggml_tensor * wo,
             ggml_tensor * wo_b,
             ggml_tensor * q_cur, // [n_embd_head_q, n_head_q, n_tokens]
@@ -825,10 +825,10 @@ struct llm_graph_context {
             ggml_tensor * inp_pos = nullptr,
                    bool   use_rope = false) const;
 
-    llm_graph_input_attn_kv * build_attn_inp_kv() const;
+    lfg_graph_input_attn_kv * build_attn_inp_kv() const;
 
     ggml_tensor * build_attn(
-            llm_graph_input_attn_kv * inp,
+            lfg_graph_input_attn_kv * inp,
             ggml_tensor * wo,
             ggml_tensor * wo_b,
             ggml_tensor * q_cur, // [n_embd_head_q, n_head_q, n_tokens]
@@ -842,11 +842,11 @@ struct llm_graph_context {
             ggml_tensor * inp_pos = nullptr,
                    bool   use_rope = false) const;
 
-    llm_graph_input_attn_kv_iswa * build_attn_inp_kv_iswa() const;
+    lfg_graph_input_attn_kv_iswa * build_attn_inp_kv_iswa() const;
 
     // note: if k_cur or v_cur are not provided, they will not be stored in the memory
     ggml_tensor * build_attn(
-            llm_graph_input_attn_kv_iswa * inp,
+            lfg_graph_input_attn_kv_iswa * inp,
             ggml_tensor * wo,
             ggml_tensor * wo_b,
             ggml_tensor * q_cur, // [n_embd_head_q, n_head_q, n_tokens]
@@ -860,10 +860,10 @@ struct llm_graph_context {
             ggml_tensor * inp_pos = nullptr,
                    bool   use_rope = false) const;
 
-    llm_graph_input_attn_cross * build_attn_inp_cross() const;
+    lfg_graph_input_attn_cross * build_attn_inp_cross() const;
 
     ggml_tensor * build_attn(
-            llm_graph_input_attn_cross * inp,
+            lfg_graph_input_attn_cross * inp,
             ggml_tensor * wo,
             ggml_tensor * wo_b,
             ggml_tensor * q_cur, // [n_embd_head_q, n_head_q, n_tokens]
@@ -894,19 +894,19 @@ struct llm_graph_context {
                uint32_t   rs_head,
                uint32_t   rs_size,
                 int32_t   rs_zero,
-            const llm_graph_get_rows_fn & get_state_rows = ggml_get_rows) const;
+            const lfg_graph_get_rows_fn & get_state_rows = ggml_get_rows) const;
 
-    llm_graph_input_rs * build_rs_inp() const;
+    lfg_graph_input_rs * build_rs_inp() const;
 
     ggml_tensor * build_rs(
-            llm_graph_input_rs * inp,
+            lfg_graph_input_rs * inp,
             ggml_tensor * s,
                 int32_t   state_size,
                 int32_t   n_seqs,
-            const llm_graph_get_rows_fn & get_state_rows = ggml_get_rows) const;
+            const lfg_graph_get_rows_fn & get_state_rows = ggml_get_rows) const;
 
     ggml_tensor * build_rwkv_token_shift_load(
-        llm_graph_input_rs * inp,
+        lfg_graph_input_rs * inp,
         const lfg_ubatch & ubatch,
                        int   il) const;
 
@@ -918,9 +918,9 @@ struct llm_graph_context {
     // hybrid
     //
 
-    llm_graph_input_mem_hybrid * build_inp_mem_hybrid() const;
+    lfg_graph_input_mem_hybrid * build_inp_mem_hybrid() const;
 
-    llm_graph_input_mem_hybrid_iswa * build_inp_mem_hybrid_iswa() const;
+    lfg_graph_input_mem_hybrid_iswa * build_inp_mem_hybrid_iswa() const;
 
     //
     // pooling

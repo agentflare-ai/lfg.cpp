@@ -76,13 +76,13 @@ static std::vector<std::string> lfg_get_list_splits(const std::string & path, co
     {
         int ret = lfg_split_prefix(buf.data(), buf.size(), path.c_str(), idx, n_split);
         if (!ret) {
-            throw std::runtime_error(format("invalid split file name: %s", path.c_str()));
+            throw std::runtime_error(lfg_format("invalid split file name: %s", path.c_str()));
         }
         split_prefix = std::string(buf.data(), ret);
     }
 
     if (split_prefix.empty()) {
-        throw std::runtime_error(format("invalid split file: %s", path.c_str()));
+        throw std::runtime_error(lfg_format("invalid split file: %s", path.c_str()));
     }
 
     for (int idx = 0; idx < n_split; ++idx) {
@@ -154,7 +154,7 @@ namespace GGUFMeta {
             const enum gguf_type kt = gguf_get_kv_type(ctx, k);
 
             if (kt != GKV::gt) {
-                throw std::runtime_error(format("key %s has wrong type %s but expected type %s",
+                throw std::runtime_error(lfg_format("key %s has wrong type %s but expected type %s",
                     gguf_get_key(ctx, k), gguf_type_name(kt), gguf_type_name(GKV::gt)));
             }
             return GKV::getter(ctx, k);
@@ -191,7 +191,7 @@ namespace GGUFMeta {
                     default:
                         // Shouldn't be possible to end up here, but just in case...
                         throw std::runtime_error(
-                            format("Unsupported attempt to override %s type for metadata key %s\n",
+                            lfg_format("Unsupported attempt to override %s type for metadata key %s\n",
                                 override_type_to_str(ovrd->tag), ovrd->key));
                 }
                 return true;
@@ -267,7 +267,7 @@ namespace GGUFMeta {
 
         if (kid < 0) {
             if (required) {
-                throw std::runtime_error(format("key not found in model: %s", key.c_str()));
+                throw std::runtime_error(lfg_format("key not found in model: %s", key.c_str()));
             }
             return false;
         }
@@ -282,11 +282,11 @@ namespace GGUFMeta {
 
     template<typename T>
     typename std::enable_if<std::is_integral<T>::value, bool>::type
-    lfg_model_loader::get_arr_n(enum llm_kv kid, T & result, bool required) {
-        return get_arr_n(llm_kv(kid), result, required);
+    lfg_model_loader::get_arr_n(enum lfg_kv_enum kid, T & result, bool required) {
+        return get_arr_n(lfg_kv_enum(kid), result, required);
     }
 
-    template bool lfg_model_loader::get_arr_n(enum llm_kv kid, uint32_t & result, bool required);
+    template bool lfg_model_loader::get_arr_n(enum lfg_kv_enum kid, uint32_t & result, bool required);
 
     template<typename T>
     bool lfg_model_loader::get_arr(const std::string & key, std::vector<T> & result, bool required) {
@@ -295,7 +295,7 @@ namespace GGUFMeta {
 
         if (kid < 0 || gguf_get_kv_type(ctx, kid) != GGUF_TYPE_ARRAY) {
             if (required) {
-                throw std::runtime_error(format("array key not found in model: %s", key.c_str()));
+                throw std::runtime_error(lfg_format("array key not found in model: %s", key.c_str()));
             }
             return false;
         }
@@ -310,7 +310,7 @@ namespace GGUFMeta {
             case GGUF_TYPE_FLOAT32: GGML_ASSERT((std::is_same<T,       float>::value)); break;
             case GGUF_TYPE_STRING:  GGML_ASSERT((std::is_same<T, std::string>::value)); break;
             default:
-                throw std::runtime_error(format("%s is not a string/float32/uint32/int32 array", key.c_str()));
+                throw std::runtime_error(lfg_format("%s is not a string/float32/uint32/int32 array", key.c_str()));
         }
 
         if constexpr (std::is_same<T, std::string>::value) {
@@ -336,7 +336,7 @@ namespace GGUFMeta {
 
         if (kid < 0 || gguf_get_kv_type(ctx, kid) != GGUF_TYPE_ARRAY) {
             if (required) {
-                throw std::runtime_error(format("array key not found in model: %s", key.c_str()));
+                throw std::runtime_error(lfg_format("array key not found in model: %s", key.c_str()));
             }
             return false;
         }
@@ -352,11 +352,11 @@ namespace GGUFMeta {
             case GGUF_TYPE_FLOAT32: GGML_ASSERT((std::is_same<T,       float>::value)); break;
             case GGUF_TYPE_STRING:  GGML_ASSERT((std::is_same<T, std::string>::value)); break;
             default:
-                throw std::runtime_error(format("%s is not a string/float32/uint32/int32 array", key.c_str()));
+                throw std::runtime_error(lfg_format("%s is not a string/float32/uint32/int32 array", key.c_str()));
         }
 
         if (arr_info.length > N_MAX) {
-            throw std::runtime_error(format("array length %u for key %s exceeds max %u", (uint32_t) arr_info.length, key.c_str(), (uint32_t) N_MAX));
+            throw std::runtime_error(lfg_format("array length %u for key %s exceeds max %u", (uint32_t) arr_info.length, key.c_str(), (uint32_t) N_MAX));
         }
 
         if constexpr (std::is_same<T, std::string>::value) {
@@ -380,11 +380,11 @@ namespace GGUFMeta {
     }
 
     template<typename T>
-    bool lfg_model_loader::get_arr(enum llm_kv kid, T & result, bool required) {
-        return get_arr(llm_kv(kid), result, required);
+    bool lfg_model_loader::get_arr(enum lfg_kv_enum kid, T & result, bool required) {
+        return get_arr(lfg_kv_enum(kid), result, required);
     }
 
-    template bool lfg_model_loader::get_arr<std::vector<std::string>>(enum llm_kv kid, std::vector<std::string> & result, bool required);
+    template bool lfg_model_loader::get_arr<std::vector<std::string>>(enum lfg_kv_enum kid, std::vector<std::string> & result, bool required);
 
     template<typename T>
     bool lfg_model_loader::get_key(const std::string & key, T & result, bool required) {
@@ -396,24 +396,24 @@ namespace GGUFMeta {
         const bool found = GGUFMeta::GKV<T>::set(meta.get(), key, result, override);
 
         if (required && !found) {
-            throw std::runtime_error(format("key not found in model: %s", key.c_str()));
+            throw std::runtime_error(lfg_format("key not found in model: %s", key.c_str()));
         }
 
         return found;
     }
 
     template<typename T>
-    bool lfg_model_loader::get_key(enum llm_kv kid, T & result, bool required) {
-        return get_key(llm_kv(kid), result, required);
+    bool lfg_model_loader::get_key(enum lfg_kv_enum kid, T & result, bool required) {
+        return get_key(lfg_kv_enum(kid), result, required);
     }
 
-    template bool lfg_model_loader::get_key<bool>       (enum llm_kv kid, bool & result,        bool required);
-    template bool lfg_model_loader::get_key<float>      (enum llm_kv kid, float & result,       bool required);
-    template bool lfg_model_loader::get_key<uint32_t>   (enum llm_kv kid, uint32_t & result,    bool required);
-    template bool lfg_model_loader::get_key<std::string>(enum llm_kv kid, std::string & result, bool required);
+    template bool lfg_model_loader::get_key<bool>       (enum lfg_kv_enum kid, bool & result,        bool required);
+    template bool lfg_model_loader::get_key<float>      (enum lfg_kv_enum kid, float & result,       bool required);
+    template bool lfg_model_loader::get_key<uint32_t>   (enum lfg_kv_enum kid, uint32_t & result,    bool required);
+    template bool lfg_model_loader::get_key<std::string>(enum lfg_kv_enum kid, std::string & result, bool required);
 
     template<>
-    bool lfg_model_loader::get_key(enum llm_kv kid, enum lfg_pooling_type & result, bool required) {
+    bool lfg_model_loader::get_key(enum lfg_kv_enum kid, enum lfg_pooling_type & result, bool required) {
         uint32_t tmp;
         const bool found = get_key(kid, tmp, required);
         if (found) {
@@ -431,13 +431,13 @@ namespace GGUFMeta {
 
         if (kid < 0) {
             if (required) {
-                throw std::runtime_error(format("key not found in model: %s", key.c_str()));
+                throw std::runtime_error(lfg_format("key not found in model: %s", key.c_str()));
             }
             return false;
         }
 
         if (n > N_MAX) {
-            throw std::runtime_error(format("n > N_MAX: %u > %u for key %s", (uint32_t) n, (uint32_t) N_MAX, key.c_str()));
+            throw std::runtime_error(lfg_format("n > N_MAX: %u > %u for key %s", (uint32_t) n, (uint32_t) N_MAX, key.c_str()));
         }
 
         if (gguf_get_kv_type(meta.get(), kid) == GGUF_TYPE_ARRAY) {
@@ -445,7 +445,7 @@ namespace GGUFMeta {
                 GGUFMeta::GKV<GGUFMeta::ArrayInfo>::get_kv(meta.get(), kid);
 
             if (n != arr_info.length) {
-                throw std::runtime_error(format("key %s has wrong array length; expected %u, got %u", key.c_str(), n, (uint32_t) arr_info.length));
+                throw std::runtime_error(lfg_format("key %s has wrong array length; expected %u, got %u", key.c_str(), n, (uint32_t) arr_info.length));
             }
 
             return get_arr(key, result, required);
@@ -466,18 +466,18 @@ namespace GGUFMeta {
     }
 
     template<typename T>
-    bool lfg_model_loader::get_key_or_arr(enum llm_kv kid, T & result, uint32_t n, bool required) {
-        return get_key_or_arr(llm_kv(kid), result, n, required);
+    bool lfg_model_loader::get_key_or_arr(enum lfg_kv_enum kid, T & result, uint32_t n, bool required) {
+        return get_key_or_arr(lfg_kv_enum(kid), result, n, required);
     }
 
-    bool lfg_model_loader::get_key_or_arr(enum llm_kv kid, uint32_t & result, bool required) {
-        const std::string key = llm_kv(kid);
+    bool lfg_model_loader::get_key_or_arr(enum lfg_kv_enum kid, uint32_t & result, bool required) {
+        const std::string key = lfg_kv_enum(kid);
 
         const int id = static_cast<int>(gguf_find_key(meta.get(), key.c_str()));
 
         if (id < 0) {
             if (required) {
-                throw std::runtime_error(format("key not found in model: %s", key.c_str()));
+                throw std::runtime_error(lfg_format("key not found in model: %s", key.c_str()));
             }
             return false;
         }
@@ -485,7 +485,7 @@ namespace GGUFMeta {
         // throw and error if type is an array
         if (gguf_get_kv_type(meta.get(), id) == GGUF_TYPE_ARRAY) {
             if (required) {
-                throw std::runtime_error(format("expected scalar, found array for key: %s", key.c_str()));
+                throw std::runtime_error(lfg_format("expected scalar, found array for key: %s", key.c_str()));
             }
             return false;
         }
@@ -494,9 +494,9 @@ namespace GGUFMeta {
     }
 
     // TODO: this is not very clever - figure out something better
-    template bool lfg_model_loader::get_key_or_arr<std::array<int, 4>>(enum llm_kv kid, std::array<int, 4> & result, uint32_t n, bool required);
-    template bool lfg_model_loader::get_key_or_arr<std::array<uint32_t, 512>>(enum llm_kv kid, std::array<uint32_t, 512> & result, uint32_t n, bool required);
-    template bool lfg_model_loader::get_key_or_arr<std::array<float, 512>>(enum llm_kv kid, std::array<float, 512> & result, uint32_t n, bool required);
+    template bool lfg_model_loader::get_key_or_arr<std::array<int, 4>>(enum lfg_kv_enum kid, std::array<int, 4> & result, uint32_t n, bool required);
+    template bool lfg_model_loader::get_key_or_arr<std::array<uint32_t, 512>>(enum lfg_kv_enum kid, std::array<uint32_t, 512> & result, uint32_t n, bool required);
+    template bool lfg_model_loader::get_key_or_arr<std::array<float, 512>>(enum lfg_kv_enum kid, std::array<float, 512> & result, uint32_t n, bool required);
 
 
 lfg_model_loader::lfg_model_loader(
@@ -531,7 +531,7 @@ lfg_model_loader::lfg_model_loader(
     meta.reset(gguf_init_from_file(fname.c_str(), params));
     if (!meta) {
         ok = false;
-        error = format("%s: failed to load model from %s", __func__, fname.c_str());
+        error = lfg_format("%s: failed to load model from %s", __func__, fname.c_str());
         return;
     }
 
@@ -540,8 +540,8 @@ lfg_model_loader::lfg_model_loader(
         LFG_LOG_INFO("%s: Leap Bundle detected: %s\n", __func__, fname.c_str());
     }
 
-    get_key(llm_kv(LLM_KV_GENERAL_ARCHITECTURE), arch_name, false);
-    llm_kv = LLM_KV(llm_arch_from_string(arch_name));
+    get_key(lfg_kv_enum(LFG_KV_GENERAL_ARCHITECTURE), arch_name, false);
+    lfg_kv_enum = LFG_KV(lfg_arch_from_string(arch_name));
 
     files.emplace_back(new lfg_file(fname.c_str(), "rb", use_direct_io));
     contexts.emplace_back(ctx);
@@ -567,23 +567,23 @@ lfg_model_loader::lfg_model_loader(
         std::string tensor_name = std::string(cur->name);
         // make sure there is no duplicated tensor names
         if (weights_map.find(tensor_name) != weights_map.end()) {
-            throw std::runtime_error(format("invalid model: tensor '%s' is duplicated", ggml_get_name(cur)));
+            throw std::runtime_error(lfg_format("invalid model: tensor '%s' is duplicated", ggml_get_name(cur)));
         }
         n_elements += ggml_nelements(cur);
         n_bytes    += ggml_nbytes(cur);
         weights_map.emplace(tensor_name, lfg_tensor_weight(files.back().get(), 0, meta.get(), cur));
     }
     uint16_t n_split = 0;
-    get_key(llm_kv(LLM_KV_SPLIT_COUNT), n_split, false);
+    get_key(lfg_kv_enum(LFG_KV_SPLIT_COUNT), n_split, false);
 
     // Load additional GGML contexts
     if (n_split > 1) {
         // make sure the main file is loaded first
         uint16_t idx = 0;
-        const std::string kv_split_no = llm_kv(LLM_KV_SPLIT_NO);
+        const std::string kv_split_no = lfg_kv_enum(LFG_KV_SPLIT_NO);
         get_key(kv_split_no, idx);
         if (idx != 0) {
-            throw std::runtime_error(format("illegal split file idx: %d (file: %s), model must be loaded with the first split", idx, fname.c_str()));
+            throw std::runtime_error(lfg_format("illegal split file idx: %d (file: %s), model must be loaded with the first split", idx, fname.c_str()));
         }
 
         // generate list of splits if needed
@@ -593,7 +593,7 @@ lfg_model_loader::lfg_model_loader(
 
         // in case user give a custom list of splits, check if it matches the expected number
         if (n_split != (uint16_t)splits.size()) {
-            throw std::runtime_error(format("invalid split count, given: %zu splits, but expected %d", splits.size(), n_split));
+            throw std::runtime_error(lfg_format("invalid split count, given: %zu splits, but expected %d", splits.size(), n_split));
         }
 
         if (trace > 0) {
@@ -610,18 +610,18 @@ lfg_model_loader::lfg_model_loader(
             };
             gguf_context_ptr ctx_gguf { gguf_init_from_file(fname_split, split_params) };
             if (!ctx_gguf) {
-                throw std::runtime_error(format("%s: failed to load GGUF split from %s", __func__, fname_split));
+                throw std::runtime_error(lfg_format("%s: failed to load GGUF split from %s", __func__, fname_split));
             }
 
             // check idx
             {
                 const int kid = static_cast<int>(gguf_find_key(ctx_gguf.get(), kv_split_no.c_str()));
                 if (kid < 0) {
-                    throw std::runtime_error(format("missing key %s in GGUF split %s", kv_split_no.c_str(), fname_split));
+                    throw std::runtime_error(lfg_format("missing key %s in GGUF split %s", kv_split_no.c_str(), fname_split));
                 }
                 int idx_gguf = gguf_get_val_u16(ctx_gguf.get(), kid);
                 if (idx_gguf != idx) {
-                    throw std::runtime_error(format("invalid split file idx: %d (file: %s), expected %d", idx_gguf, fname_split, idx));
+                    throw std::runtime_error(lfg_format("invalid split file idx: %d (file: %s), expected %d", idx_gguf, fname_split, idx));
                 }
             }
 
@@ -633,7 +633,7 @@ lfg_model_loader::lfg_model_loader(
                 std::string tensor_name = std::string(cur->name);
                 // make sure there is no duplicated tensor names
                 if (weights_map.find(tensor_name) != weights_map.end()) {
-                    throw std::runtime_error(format("invalid model: tensor '%s' is duplicated", ggml_get_name(cur)));
+                    throw std::runtime_error(lfg_format("invalid model: tensor '%s' is duplicated", ggml_get_name(cur)));
                 }
                 n_elements += ggml_nelements(cur);
                 n_bytes    += ggml_nbytes(cur);
@@ -641,13 +641,13 @@ lfg_model_loader::lfg_model_loader(
             }
         }
 
-        get_key(llm_kv(LLM_KV_SPLIT_TENSORS_COUNT), n_tensors);
+        get_key(lfg_kv_enum(LFG_KV_SPLIT_TENSORS_COUNT), n_tensors);
 
         // sanity check
         {
             const int n_tensors_loaded = (int) weights_map.size();
             if (n_tensors != n_tensors_loaded) {
-                throw std::runtime_error(format("corrupted model: %d tensors expected but %d found", n_tensors, n_tensors_loaded));
+                throw std::runtime_error(lfg_format("corrupted model: %d tensors expected but %d found", n_tensors, n_tensors_loaded));
             }
         }
 
@@ -728,7 +728,7 @@ lfg_model_loader::lfg_model_loader(
 
         {
             uint32_t ftype_val = 0;
-            if (get_key(LLM_KV_GENERAL_FILE_TYPE, ftype_val, false)) {
+            if (get_key(LFG_KV_GENERAL_FILE_TYPE, ftype_val, false)) {
                 ftype = (lfg_ftype) ftype_val;
             }
         }
@@ -740,15 +740,15 @@ lfg_model_loader::lfg_model_loader(
             const enum gguf_type type   = gguf_get_kv_type(meta.get(), i);
             const std::string type_name =
                 type == GGUF_TYPE_ARRAY
-                ? format("%s[%s,%zu]", gguf_type_name(type), gguf_type_name(gguf_get_arr_type(meta.get(), i)), gguf_get_arr_n(meta.get(), i))
+                ? lfg_format("%s[%s,%zu]", gguf_type_name(type), gguf_type_name(gguf_get_arr_type(meta.get(), i)), gguf_get_arr_n(meta.get(), i))
                 : gguf_type_name(type);
 
-            std::string value          = gguf_kv_to_str(meta.get(), i);
+            std::string value          = lfg_gguf_kv_to_str(meta.get(), i);
             const size_t MAX_VALUE_LEN = 40;
             if (value.size() > MAX_VALUE_LEN) {
-                value = format("%s...", value.substr(0, MAX_VALUE_LEN - 3).c_str());
+                value = lfg_format("%s...", value.substr(0, MAX_VALUE_LEN - 3).c_str());
             }
-            replace_all(value, "\n", "\\n");
+            lfg_replace_all(value, "\n", "\\n");
 
             LFG_LOG_INFO("{}: - kv {:3d}: {:42s} {:16s} = {}\n", __func__, i, name, type_name.c_str(), value.c_str());
         }
@@ -778,8 +778,8 @@ std::string lfg_model_loader::get_arch_name() const {
     return arch_name;
 }
 
-enum llm_arch lfg_model_loader::get_arch() const {
-    return llm_kv.arch;
+enum lfg_arch_enum lfg_model_loader::get_arch() const {
+    return lfg_kv_enum.arch;
 }
 
 const lfg_model_loader::lfg_tensor_weight * lfg_model_loader::get_weight(const char * name) const {
@@ -794,7 +794,7 @@ const lfg_model_loader::lfg_tensor_weight * lfg_model_loader::get_weight(const c
 const lfg_model_loader::lfg_tensor_weight & lfg_model_loader::require_weight(const char * name) const {
     const lfg_tensor_weight * weight = get_weight(name);
     if (!weight) {
-        throw std::runtime_error(format("%s: tensor '%s' not found", __func__, name));
+        throw std::runtime_error(lfg_format("%s: tensor '%s' not found", __func__, name));
     }
     return *weight;
 }
@@ -810,7 +810,7 @@ struct ggml_tensor * lfg_model_loader::get_tensor_meta(const char * name) const 
 struct ggml_tensor * lfg_model_loader::require_tensor_meta(const std::string & name) const {
     struct ggml_tensor * tensor = get_tensor_meta(name.c_str());
     if (!tensor) {
-        throw std::runtime_error(format("%s: tensor '%s' not found", __func__, name.c_str()));
+        throw std::runtime_error(lfg_format("%s: tensor '%s' not found", __func__, name.c_str()));
     }
     return tensor;
 }
@@ -822,7 +822,7 @@ const struct ggml_tensor * lfg_model_loader::check_tensor_dims(const std::string
         if (!required) {
             return NULL;
         }
-        throw std::runtime_error(format("%s: tensor '%s' not found", __func__, name.c_str()));
+        throw std::runtime_error(lfg_format("%s: tensor '%s' not found", __func__, name.c_str()));
     }
 
     {
@@ -835,7 +835,7 @@ const struct ggml_tensor * lfg_model_loader::check_tensor_dims(const std::string
         }
         if (!is_ok) {
             throw std::runtime_error(
-                    format("%s: tensor '%s' has wrong shape; expected %s, got %s",
+                    lfg_format("%s: tensor '%s' has wrong shape; expected %s, got %s",
                         __func__, name.c_str(),
                         lfg_format_tensor_shape(ne).c_str(),
                         lfg_format_tensor_shape(cur).c_str()));
@@ -876,7 +876,7 @@ struct ggml_tensor * lfg_model_loader::create_tensor_as_view(struct ggml_context
     }
 
     if (cur->type != base->type) {
-        throw std::runtime_error(format("%s: tensor '%s' has wrong type; expected %s, got %s", __func__, name.c_str(), ggml_type_name(base->type), ggml_type_name(cur->type)));
+        throw std::runtime_error(lfg_format("%s: tensor '%s' has wrong type; expected %s, got %s", __func__, name.c_str(), ggml_type_name(base->type), ggml_type_name(cur->type)));
     }
 
     std::array<int64_t, GGML_MAX_DIMS> dims;
@@ -898,7 +898,7 @@ struct ggml_tensor * lfg_model_loader::create_tensor_as_view(struct ggml_context
 
 void lfg_model_loader::done_getting_tensors() const {
     if (n_created != n_tensors) {
-        throw std::runtime_error(format("%s: wrong number of tensors; expected %d, got %d", __func__, n_tensors, n_created));
+        throw std::runtime_error(lfg_format("%s: wrong number of tensors; expected %d, got %d", __func__, n_tensors, n_created));
     }
 }
 
@@ -971,7 +971,7 @@ void lfg_model_loader::load_data_for(struct ggml_tensor * cur) const {
     }
 
     if (check_tensors && !ggml_validate_row_data(cur->type, cur->data, ggml_nbytes(cur))) {
-        throw std::runtime_error(format("tensor '%s' has invalid data", ggml_get_name(cur)));
+        throw std::runtime_error(lfg_format("tensor '%s' has invalid data", ggml_get_name(cur)));
     }
 }
 
@@ -983,7 +983,7 @@ bool lfg_model_loader::load_all_data(
         void * progress_callback_user_data) {
     GGML_ASSERT(size_data != 0 && "call init_mappings() first");
 
-    std::vector<no_init<uint8_t>> read_buf;
+    std::vector<lfg_no_init<uint8_t>> read_buf;
     std::vector<std::future<std::pair<ggml_tensor *, bool>>> validation_result;
 
     // 4 staging buffers for async uploads, each sized 1MB seems to be a good default for single NVMe drives.
@@ -1199,7 +1199,7 @@ bool lfg_model_loader::load_all_data(
                     file->read_raw(read_buf.data(), n_size);
                     ggml_backend_tensor_set(cur, read_buf.data(), 0, n_size);
                     if (check_tensors && !ggml_validate_row_data(cur->type, read_buf.data(), n_size)) {
-                        throw std::runtime_error(format("tensor '%s' has invalid data", ggml_get_name(cur)));
+                        throw std::runtime_error(lfg_format("tensor '%s' has invalid data", ggml_get_name(cur)));
                     }
                 }
             }

@@ -126,7 +126,7 @@ struct llm_tokenizer_spm_session {
         size_t offs = 0;
         while (offs < text.size()) {
             llm_symbol sym;
-            size_t len = unicode_len_utf8(text[offs]);
+            size_t len = lfg_unicode_len_utf8(text[offs]);
             sym.text = text.c_str() + offs;
             sym.n = std::min(len, text.size() - offs);
             offs += sym.n;
@@ -531,7 +531,7 @@ struct llm_tokenizer_bpe_session {
 
     void tokenize(const std::string & text, std::vector<lfg_token> & output) {
         int final_prev_index = -1;
-        const auto word_collection = unicode_regex_split(text, tokenizer.regex_exprs);
+        const auto word_collection = lfg_unicode_regex_split(text, tokenizer.regex_exprs);
 
         symbols_final.clear();
 
@@ -550,7 +550,7 @@ struct llm_tokenizer_bpe_session {
 
             while (offset < word.size()) {
                 llm_symbol sym;
-                size_t char_len = std::min(word.size() - offset, (size_t) unicode_len_utf8(word[offset]));
+                size_t char_len = std::min(word.size() - offset, (size_t) lfg_unicode_len_utf8(word[offset]));
                 sym.text = word.c_str() + offset;
                 sym.n = char_len;
                 offset += sym.n;
@@ -728,11 +728,11 @@ struct llm_tokenizer_wpm_session {
 
     // TODO: reduce string copies by using cpts_offs array
     static std::vector<std::string> preprocess(const std::string & text)  {
-        const std::vector<uint32_t> cpts_nfd = unicode_cpts_normalize_nfd(unicode_cpts_from_utf8(text));
+        const std::vector<uint32_t> cpts_nfd = lfg_unicode_cpts_normalize_nfd(lfg_unicode_cpts_from_utf8(text));
         std::vector<std::string> words(1, "");
 
         for (const uint32_t cpt : cpts_nfd) {
-            const auto flags = unicode_cpt_flags_from_cpt(cpt);
+            const auto flags = lfg_unicode_cpt_flags_from_cpt(cpt);
 
             if (flags.is_whitespace) {
                 if (words.back().size()) {  // finish previous word if any
@@ -746,7 +746,7 @@ struct llm_tokenizer_wpm_session {
                 continue;
             }
 
-            const std::string s = unicode_cpt_to_utf8(unicode_tolower(cpt));
+            const std::string s = lfg_unicode_cpt_to_utf8(lfg_unicode_tolower(cpt));
             if (flags.is_punctuation || ( cpt < 0x7F && flags.is_symbol ) || is_chinese_char(cpt)) {
                 if (words.back().size()) {  // finish previous word if any
                     words.emplace_back();
@@ -892,7 +892,7 @@ struct llm_tokenizer_ugm_session {
         for (size_t input_offset = 0; input_offset < input_len;) {
             size_t prefix_offset = input_offset;
             // calculate how many code units are in the currently processed UTF code point
-            size_t n_utf8_code_units = std::min<size_t>(unicode_len_utf8(normalized[input_offset]), input_len - input_offset);
+            size_t n_utf8_code_units = std::min<size_t>(lfg_unicode_len_utf8(normalized[input_offset]), input_len - input_offset);
 
             // traverse the token matcher trie to find a matching token
             bool single_codepoint_token_found = false;
@@ -1123,7 +1123,7 @@ private:
         try {
             // if yes, return this sequence unmodified
             size_t prefix_offset = input_offset;
-            unicode_cpt_from_utf8(input, prefix_offset);
+            lfg_unicode_cpt_from_utf8(input, prefix_offset);
             return { &input[input_offset], prefix_offset - input_offset, prefix_offset - input_offset };
         } catch (std::invalid_argument & /*ex*/) {
             // if no, consume 1 byte and return U+FFFD - REPLACEMENT CHARACTER
@@ -1280,11 +1280,11 @@ struct llm_tokenizer_plamo2 : llm_tokenizer {
             suffix_to_score[entry.text] = entry.score;
 
             // Extract suffixes character by character (UTF-8 aware)
-            std::vector<uint32_t> cpts = unicode_cpts_from_utf8(entry.text);
+            std::vector<uint32_t> cpts = lfg_unicode_cpts_from_utf8(entry.text);
             for (size_t i = 1; i < cpts.size(); ++i) {
                 std::string suffix;
                 for (size_t j = i; j < cpts.size(); ++j) {
-                    suffix += unicode_cpt_to_utf8(cpts[j]);
+                    suffix += lfg_unicode_cpt_to_utf8(cpts[j]);
                 }
                 if (suffix_to_score.find(suffix) == suffix_to_score.end()) {
                     suffix_to_score[suffix] = std::numeric_limits<float>::quiet_NaN();
@@ -1320,11 +1320,11 @@ struct llm_tokenizer_plamo2 : llm_tokenizer {
         for (const auto & suffix : suffixes) {
             suffix_to_id[suffix] = num_pieces;
             if (!suffix.empty()) {
-                std::vector<uint32_t> cpts = unicode_cpts_from_utf8(suffix);
+                std::vector<uint32_t> cpts = lfg_unicode_cpts_from_utf8(suffix);
 
                 std::string remaining;
                 for (size_t i = 1; i < cpts.size(); ++i) {
-                    remaining += unicode_cpt_to_utf8(cpts[i]);
+                    remaining += lfg_unicode_cpt_to_utf8(cpts[i]);
                 }
 
                 int64_t piece_code = (static_cast<int64_t>(cpts[0]) << 32) | suffix_to_id[remaining];
@@ -1335,7 +1335,7 @@ struct llm_tokenizer_plamo2 : llm_tokenizer {
                 for (int32_t piece_length = static_cast<int32_t>(cpts.size()); piece_length > 0; --piece_length) {
                     std::string piece;
                     for (int32_t i = 0; i < piece_length; ++i) {
-                        piece += unicode_cpt_to_utf8(cpts[static_cast<size_t>(i)]);
+                        piece += lfg_unicode_cpt_to_utf8(cpts[static_cast<size_t>(i)]);
                     }
                     if (suffix_to_score.find(piece) != suffix_to_score.end()) {
                         pieces_for_suffix++;
@@ -1353,11 +1353,11 @@ struct llm_tokenizer_plamo2 : llm_tokenizer {
 
         for (const auto & suffix : suffixes) {
             // Add all prefixes of the suffix to the table (in decreasing order of length)
-            std::vector<uint32_t> cpts = unicode_cpts_from_utf8(suffix);
+            std::vector<uint32_t> cpts = lfg_unicode_cpts_from_utf8(suffix);
             for (int32_t piece_length = static_cast<int32_t>(cpts.size()); piece_length > 0; --piece_length) {
                 std::string piece;
                 for (int32_t i = 0; i < piece_length; ++i) {
-                    piece += unicode_cpt_to_utf8(cpts[static_cast<size_t>(i)]);
+                    piece += lfg_unicode_cpt_to_utf8(cpts[static_cast<size_t>(i)]);
                 }
 
                 auto score_it = suffix_to_score.find(piece);
@@ -1386,7 +1386,7 @@ struct llm_tokenizer_plamo2 : llm_tokenizer {
     }
 
     std::vector<lfg_token> encode(const std::string & text) const {
-        std::vector<uint32_t> unicode_data = unicode_cpts_from_utf8(text);
+        std::vector<uint32_t> unicode_data = lfg_unicode_cpts_from_utf8(text);
         // Skip the first code point if it is a BOM (Byte Order Mark)
         if (!unicode_data.empty() && unicode_data[0] == 0xFEFF) {
             unicode_data.erase(unicode_data.begin());
@@ -1630,7 +1630,7 @@ struct lfg_vocab::impl {
 
     ~impl() = default;
 
-    void load(lfg_model_loader & ml, const LLM_KV & kv);
+    void load(lfg_model_loader & ml, const LFG_KV & kv);
 
     enum lfg_vocab_type get_type() const;
 
@@ -1699,15 +1699,15 @@ private:
     const lfg_vocab & vocab;
 };
 
-void lfg_vocab::impl::load(lfg_model_loader & ml, const LLM_KV & kv) {
+void lfg_vocab::impl::load(lfg_model_loader & ml, const LFG_KV & kv) {
     struct gguf_context * ctx = ml.meta.get();
 
     // determine vocab type
     {
-        ml.get_key(LLM_KV_TOKENIZER_MODEL, tokenizer_model);
-        ml.get_key(LLM_KV_TOKENIZER_PRE,   tokenizer_pre, false);
+        ml.get_key(LFG_KV_TOKENIZER_MODEL, tokenizer_model);
+        ml.get_key(LFG_KV_TOKENIZER_PRE,   tokenizer_pre, false);
 
-        ml.get_key(LLM_KV_TOKENIZER_TOKEN_TYPE_COUNT, n_token_types, false);
+        ml.get_key(LFG_KV_TOKENIZER_TOKEN_TYPE_COUNT, n_token_types, false);
 
         if (tokenizer_model == "no_vocab" || tokenizer_model == "none") {
             type = LFG_VOCAB_TYPE_NONE;
@@ -1723,7 +1723,7 @@ void lfg_vocab::impl::load(lfg_model_loader & ml, const LLM_KV & kv) {
 
             // read vocab size from metadata
             uint32_t n_tokens = 0;
-            if (ml.get_key(LLM_KV_VOCAB_SIZE, n_tokens, false)) {
+            if (ml.get_key(LFG_KV_VOCAB_SIZE, n_tokens, false)) {
                 LFG_LOG_WARN("%s: adding %u dummy tokens\n", __func__, n_tokens);
                 id_to_token.resize(n_tokens);
             }
@@ -1757,7 +1757,7 @@ void lfg_vocab::impl::load(lfg_model_loader & ml, const LLM_KV & kv) {
             type = LFG_VOCAB_TYPE_BPE;
 
             // read bpe merges and populate bpe ranks
-            const int merges_keyidx = static_cast<int>(gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_MERGES).c_str()));
+            const int merges_keyidx = static_cast<int>(gguf_find_key(ctx, kv(LFG_KV_TOKENIZER_MERGES).c_str()));
             if (merges_keyidx == -1) {
                 throw std::runtime_error("cannot find tokenizer merges in model file\n");
             }
@@ -1765,7 +1765,7 @@ void lfg_vocab::impl::load(lfg_model_loader & ml, const LLM_KV & kv) {
             const int n_merges = gguf_get_arr_n(ctx, merges_keyidx);
             for (int i = 0; i < n_merges; i++) {
                 const std::string word = gguf_get_arr_str(ctx, merges_keyidx, static_cast<size_t>(i));
-                //GGML_ASSERT(unicode_cpts_from_utf8(word).size() > 0);
+                //GGML_ASSERT(lfg_unicode_cpts_from_utf8(word).size() > 0);
 
                 std::string first;
                 std::string second;
@@ -1798,7 +1798,7 @@ void lfg_vocab::impl::load(lfg_model_loader & ml, const LLM_KV & kv) {
             special_pad_id  = 0;
             special_mask_id = LFG_TOKEN_NULL;
 
-            const int precompiled_charsmap_keyidx = static_cast<int>(gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_PRECOMPILED_CHARSMAP).c_str()));
+            const int precompiled_charsmap_keyidx = static_cast<int>(gguf_find_key(ctx, kv(LFG_KV_TOKENIZER_PRECOMPILED_CHARSMAP).c_str()));
             if (precompiled_charsmap_keyidx != -1) {
                 const gguf_type pc_type = gguf_get_arr_type(ctx, precompiled_charsmap_keyidx);
                 GGML_ASSERT(pc_type == GGUF_TYPE_INT8 || pc_type == GGUF_TYPE_UINT8);
@@ -1838,7 +1838,7 @@ void lfg_vocab::impl::load(lfg_model_loader & ml, const LLM_KV & kv) {
             special_pad_id = 3;  // <|plamo:pad|>
             special_mask_id = LFG_TOKEN_NULL;
         } else {
-            throw std::runtime_error(format("unknown tokenizer: '%s'", tokenizer_model.c_str()));
+            throw std::runtime_error(lfg_format("unknown tokenizer: '%s'", tokenizer_model.c_str()));
         }
 
         // for now, only BPE models have pre-tokenizers
@@ -2048,7 +2048,7 @@ void lfg_vocab::impl::load(lfg_model_loader & ml, const LLM_KV & kv) {
                 pre_type = LFG_VOCAB_PRE_TYPE_SOLAR_OPEN;
                 clean_spaces = false;
             } else {
-                throw std::runtime_error(format("unknown pre-tokenizer type: '%s'", tokenizer_pre.c_str()));
+                throw std::runtime_error(lfg_format("unknown pre-tokenizer type: '%s'", tokenizer_pre.c_str()));
             }
         } else if (type == LFG_VOCAB_TYPE_SPM) {
             pre_type = LFG_VOCAB_PRE_TYPE_DEFAULT;
@@ -2077,23 +2077,23 @@ void lfg_vocab::impl::load(lfg_model_loader & ml, const LLM_KV & kv) {
             pre_type = LFG_VOCAB_PRE_TYPE_DEFAULT;
         }
 
-        ml.get_key(LLM_KV_TOKENIZER_ADD_PREFIX,      add_space_prefix,         false);
-        ml.get_key(LLM_KV_TOKENIZER_REMOVE_EXTRA_WS, remove_extra_whitespaces, false);
+        ml.get_key(LFG_KV_TOKENIZER_ADD_PREFIX,      add_space_prefix,         false);
+        ml.get_key(LFG_KV_TOKENIZER_REMOVE_EXTRA_WS, remove_extra_whitespaces, false);
     }
 
-    const int token_idx = static_cast<int>(gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_LIST).c_str()));
+    const int token_idx = static_cast<int>(gguf_find_key(ctx, kv(LFG_KV_TOKENIZER_LIST).c_str()));
     if (token_idx == -1) {
         throw std::runtime_error("cannot find tokenizer vocab in model file\n");
     }
 
     const float * scores = nullptr;
-    const int score_idx = static_cast<int>(gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_SCORES).c_str()));
+    const int score_idx = static_cast<int>(gguf_find_key(ctx, kv(LFG_KV_TOKENIZER_SCORES).c_str()));
     if (score_idx != -1) {
         scores = (const float * ) gguf_get_arr_data(ctx, score_idx);
     }
 
     const int * toktypes = nullptr;
-    const int toktype_idx = static_cast<int>(gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_TOKEN_TYPE).c_str()));
+    const int toktype_idx = static_cast<int>(gguf_find_key(ctx, kv(LFG_KV_TOKENIZER_TOKEN_TYPE).c_str()));
     if (toktype_idx != -1) {
         toktypes = (const int * ) gguf_get_arr_data(ctx, toktype_idx);
     }
@@ -2161,26 +2161,26 @@ void lfg_vocab::impl::load(lfg_model_loader & ml, const LLM_KV & kv) {
 
     // special tokens
     {
-        const std::vector<std::pair<enum llm_kv, int32_t &>> special_token_types = {
-            { LLM_KV_TOKENIZER_BOS_ID,     special_bos_id     },
-            { LLM_KV_TOKENIZER_EOS_ID,     special_eos_id     },
-            { LLM_KV_TOKENIZER_EOT_ID,     special_eot_id     },
-            { LLM_KV_TOKENIZER_EOM_ID,     special_eom_id     },
-            { LLM_KV_TOKENIZER_UNK_ID,     special_unk_id     },
-            { LLM_KV_TOKENIZER_SEP_ID,     special_sep_id     },
-            { LLM_KV_TOKENIZER_PAD_ID,     special_pad_id     },
-            { LLM_KV_TOKENIZER_MASK_ID,    special_mask_id    },
-            { LLM_KV_TOKENIZER_FIM_PRE_ID, special_fim_pre_id },
-            { LLM_KV_TOKENIZER_FIM_SUF_ID, special_fim_suf_id },
-            { LLM_KV_TOKENIZER_FIM_MID_ID, special_fim_mid_id },
-            { LLM_KV_TOKENIZER_FIM_PAD_ID, special_fim_pad_id },
-            { LLM_KV_TOKENIZER_FIM_REP_ID, special_fim_rep_id },
-            { LLM_KV_TOKENIZER_FIM_SEP_ID, special_fim_sep_id },
+        const std::vector<std::pair<enum lfg_kv_enum, int32_t &>> special_token_types = {
+            { LFG_KV_TOKENIZER_BOS_ID,     special_bos_id     },
+            { LFG_KV_TOKENIZER_EOS_ID,     special_eos_id     },
+            { LFG_KV_TOKENIZER_EOT_ID,     special_eot_id     },
+            { LFG_KV_TOKENIZER_EOM_ID,     special_eom_id     },
+            { LFG_KV_TOKENIZER_UNK_ID,     special_unk_id     },
+            { LFG_KV_TOKENIZER_SEP_ID,     special_sep_id     },
+            { LFG_KV_TOKENIZER_PAD_ID,     special_pad_id     },
+            { LFG_KV_TOKENIZER_MASK_ID,    special_mask_id    },
+            { LFG_KV_TOKENIZER_FIM_PRE_ID, special_fim_pre_id },
+            { LFG_KV_TOKENIZER_FIM_SUF_ID, special_fim_suf_id },
+            { LFG_KV_TOKENIZER_FIM_MID_ID, special_fim_mid_id },
+            { LFG_KV_TOKENIZER_FIM_PAD_ID, special_fim_pad_id },
+            { LFG_KV_TOKENIZER_FIM_REP_ID, special_fim_rep_id },
+            { LFG_KV_TOKENIZER_FIM_SEP_ID, special_fim_sep_id },
 
             // deprecated
-            { LLM_KV_TOKENIZER_PREFIX_ID, special_fim_pre_id },
-            { LLM_KV_TOKENIZER_SUFFIX_ID, special_fim_suf_id },
-            { LLM_KV_TOKENIZER_MIDDLE_ID, special_fim_mid_id },
+            { LFG_KV_TOKENIZER_PREFIX_ID, special_fim_pre_id },
+            { LFG_KV_TOKENIZER_SUFFIX_ID, special_fim_suf_id },
+            { LFG_KV_TOKENIZER_MIDDLE_ID, special_fim_mid_id },
         };
 
         for (const auto & it : special_token_types) {
@@ -2203,19 +2203,19 @@ void lfg_vocab::impl::load(lfg_model_loader & ml, const LLM_KV & kv) {
         {
             bool temp = true;
 
-            if (ml.get_key(LLM_KV_TOKENIZER_ADD_BOS, temp, false)) {
+            if (ml.get_key(LFG_KV_TOKENIZER_ADD_BOS, temp, false)) {
                 add_bos = temp;
             }
-            if (ml.get_key(LLM_KV_TOKENIZER_ADD_EOS, temp, false)) {
+            if (ml.get_key(LFG_KV_TOKENIZER_ADD_EOS, temp, false)) {
                 add_eos = temp;
             }
-            if (ml.get_key(LLM_KV_TOKENIZER_ADD_SEP, temp, false)) {
+            if (ml.get_key(LFG_KV_TOKENIZER_ADD_SEP, temp, false)) {
                 add_sep = temp;
             }
         }
 
         // auto-detect special tokens by text
-        // TODO: convert scripts should provide these tokens through the KV metadata LLM_KV_TOKENIZER_...
+        // TODO: convert scripts should provide these tokens through the KV metadata LFG_KV_TOKENIZER_...
         //       for now, we apply this workaround to find the tokens based on their text
 
         for (const auto & t : token_to_id) {
@@ -2577,9 +2577,9 @@ void lfg_vocab::impl::load(lfg_model_loader & ml, const LLM_KV & kv) {
         std::string tokenizer_pre;
         std::string general_arch;
 
-        ml.get_key(LLM_KV_GENERAL_NAME,  model_name,    false);
-        ml.get_key(LLM_KV_TOKENIZER_PRE, tokenizer_pre, false);
-        ml.get_key(LLM_KV_GENERAL_ARCHITECTURE, general_arch, false);
+        ml.get_key(LFG_KV_GENERAL_NAME,  model_name,    false);
+        ml.get_key(LFG_KV_TOKENIZER_PRE, tokenizer_pre, false);
+        ml.get_key(LFG_KV_GENERAL_ARCHITECTURE, general_arch, false);
 
         // model name to lowercase
         std::transform(model_name.begin(), model_name.end(), model_name.begin(),
@@ -2869,25 +2869,25 @@ std::string lfg_vocab::impl::token_to_piece_for_cache(lfg_token token, bool spec
 }
 
 static void lfg_escape_whitespace(std::string & text) {
-    replace_all(text, " ", "\xe2\x96\x81");
+    lfg_replace_all(text, " ", "\xe2\x96\x81");
 }
 
 static void lfg_unescape_whitespace(std::string & word) {
-    replace_all(word, "\xe2\x96\x81", " ");
+    lfg_replace_all(word, "\xe2\x96\x81", " ");
 }
 
 static std::string lfg_decode_text(const std::string & text) {
     std::string decoded_text;
 
-    const auto cpts = unicode_cpts_from_utf8(text);
+    const auto cpts = lfg_unicode_cpts_from_utf8(text);
     for (const auto cpt : cpts) {
-        const auto utf8 = unicode_cpt_to_utf8(cpt);
+        const auto utf8 = lfg_unicode_cpt_to_utf8(cpt);
         try {
-            decoded_text += unicode_utf8_to_byte(utf8);
+            decoded_text += lfg_unicode_utf8_to_byte(utf8);
         } catch (const std::out_of_range & /*e*/) {
             decoded_text += "[UNK_BYTE_0x";
             for (const auto c : utf8) {
-                decoded_text += format("%02x", (uint8_t) c);
+                decoded_text += lfg_format("%02x", (uint8_t) c);
             }
             decoded_text += text + "]";
         }
@@ -3350,7 +3350,7 @@ lfg_vocab::lfg_vocab() : pimpl(new impl(*this)) {
 
 lfg_vocab::~lfg_vocab() = default;
 
-void lfg_vocab::load(lfg_model_loader & ml, const LLM_KV & kv) {
+void lfg_vocab::load(lfg_model_loader & ml, const LFG_KV & kv) {
     pimpl->load(ml, kv);
 }
 
@@ -3431,7 +3431,7 @@ lfg_token lfg_vocab::byte_to_token(uint8_t ch) const {
         }
         case LFG_VOCAB_TYPE_WPM:
         case LFG_VOCAB_TYPE_BPE: {
-            return pimpl->token_to_id.at(unicode_byte_to_utf8(ch));
+            return pimpl->token_to_id.at(lfg_unicode_byte_to_utf8(ch));
         }
         case LFG_VOCAB_TYPE_PLAMO2: {
             // PLaMo-2 uses byte tokens in format <0xXX>

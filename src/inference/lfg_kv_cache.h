@@ -267,7 +267,7 @@ private:
                           float   freq_scale) const;
 
     ggml_cgraph * build_graph_shift(
-               llm_graph_result * res,
+               lfg_graph_result * res,
                   lfg_context * lctx) const;
 
     struct cell_ranges_t {

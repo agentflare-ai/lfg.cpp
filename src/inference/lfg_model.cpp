@@ -29,116 +29,116 @@
 #include <sstream>
 #include <stdexcept>
 
-const char * llm_type_name(llm_type type) {
+const char * lfg_type_name(lfg_type_enum type) {
     switch (type) {
-        case LLM_TYPE_14M:           return "14M";
-        case LLM_TYPE_17M:           return "17M";
-        case LLM_TYPE_22M:           return "22M";
-        case LLM_TYPE_33M:           return "33M";
-        case LLM_TYPE_47M:           return "47M";
-        case LLM_TYPE_60M:           return "60M";
-        case LLM_TYPE_70M:           return "70M";
-        case LLM_TYPE_80M:           return "80M";
-        case LLM_TYPE_109M:          return "109M";
-        case LLM_TYPE_137M:          return "137M";
-        case LLM_TYPE_140M:          return "140M";
-        case LLM_TYPE_149M:          return "149M";
-        case LLM_TYPE_160M:          return "160M";
-        case LLM_TYPE_190M:          return "190M";
-        case LLM_TYPE_220M:          return "220M";
-        case LLM_TYPE_250M:          return "250M";
-        case LLM_TYPE_256M:          return "256M";
-        case LLM_TYPE_270M:          return "270M";
-        case LLM_TYPE_335M:          return "335M";
-        case LLM_TYPE_350M:          return "350M";
-        case LLM_TYPE_360M:          return "360M";
-        case LLM_TYPE_395M:          return "395M";
-        case LLM_TYPE_410M:          return "410M";
-        case LLM_TYPE_450M:          return "450M";
-        case LLM_TYPE_475M:          return "475M";
-        case LLM_TYPE_558M:          return "558M";
-        case LLM_TYPE_700M:          return "700M";
-        case LLM_TYPE_770M:          return "770M";
-        case LLM_TYPE_780M:          return "780M";
-        case LLM_TYPE_950M:          return "950M";
-        case LLM_TYPE_0_3B:          return "0.3B";
-        case LLM_TYPE_0_5B:          return "0.5B";
-        case LLM_TYPE_0_6B:          return "0.6B";
-        case LLM_TYPE_1B:            return "1B";
-        case LLM_TYPE_1_2B:          return "1.2B";
-        case LLM_TYPE_1_3B:          return "1.3B";
-        case LLM_TYPE_1_4B:          return "1.4B";
-        case LLM_TYPE_1_5B:          return "1.5B";
-        case LLM_TYPE_1_6B:          return "1.6B";
-        case LLM_TYPE_1_7B:          return "1.7B";
-        case LLM_TYPE_1_8B:          return "1.8B";
-        case LLM_TYPE_2B:            return "2B";
-        case LLM_TYPE_2_6B:          return "2.6B";
-        case LLM_TYPE_2_8B:          return "2.8B";
-        case LLM_TYPE_2_9B:          return "2.9B";
-        case LLM_TYPE_3B:            return "3B";
-        case LLM_TYPE_4B:            return "4B";
-        case LLM_TYPE_6B:            return "6B";
-        case LLM_TYPE_6_9B:          return "6.9B";
-        case LLM_TYPE_7B:            return "7B";
-        case LLM_TYPE_8B:            return "8B";
-        case LLM_TYPE_9B:            return "9B";
-        case LLM_TYPE_11B:           return "11B";
-        case LLM_TYPE_12B:           return "12B";
-        case LLM_TYPE_13B:           return "13B";
-        case LLM_TYPE_14B:           return "14B";
-        case LLM_TYPE_15B:           return "15B";
-        case LLM_TYPE_16B:           return "16B";
-        case LLM_TYPE_20B:           return "20B";
-        case LLM_TYPE_26B:           return "26B";
-        case LLM_TYPE_27B:           return "27B";
-        case LLM_TYPE_30B:           return "30B";
-        case LLM_TYPE_32B:           return "32B";
-        case LLM_TYPE_34B:           return "34B";
-        case LLM_TYPE_35B:           return "35B";
-        case LLM_TYPE_36B:           return "36B";
-        case LLM_TYPE_40B:           return "40B";
-        case LLM_TYPE_65B:           return "65B";
-        case LLM_TYPE_70B:           return "70B";
-        case LLM_TYPE_120B:          return "120B";
-        case LLM_TYPE_142B:          return "142B";
-        case LLM_TYPE_236B:          return "236B";
-        case LLM_TYPE_290B:          return "290B";
-        case LLM_TYPE_314B:          return "314B";
-        case LLM_TYPE_405B:          return "405B";
-        case LLM_TYPE_671B:          return "671B";
-        case LLM_TYPE_SMALL:         return "0.1B";
-        case LLM_TYPE_MEDIUM:        return "0.4B";
-        case LLM_TYPE_LARGE:         return "0.8B";
-        case LLM_TYPE_XL:            return "1.5B";
-        case LLM_TYPE_A1_7B:         return "A1.7B";
-        case LLM_TYPE_A2_7B:         return "A2.7B";
-        case LLM_TYPE_8x7B:          return "8x7B";
-        case LLM_TYPE_8x22B:         return "8x22B";
-        case LLM_TYPE_16x12B:        return "16x12B";
-        case LLM_TYPE_16x3_8B:       return "16x3.8B";
-        case LLM_TYPE_10B_128x3_66B: return "10B+128x3.66B";
-        case LLM_TYPE_57B_A14B:      return "57B.A14B";
-        case LLM_TYPE_17B_16E:       return "17Bx16E (Scout)";
-        case LLM_TYPE_17B_128E:      return "17Bx128E (Maverick)";
-        case LLM_TYPE_A13B:          return "A13B";
-        case LLM_TYPE_7B_A1B:        return "7B.A1B";
-        case LLM_TYPE_8B_A1B:        return "8B.A1B";
-        case LLM_TYPE_16B_A1B:       return "16B.A1B";
-        case LLM_TYPE_21B_A3B:       return "21B.A3B";
-        case LLM_TYPE_30B_A3B:       return "30B.A3B";
-        case LLM_TYPE_31B_A3_5B:     return "31B.A3.5B";
-        case LLM_TYPE_80B_A3B:       return "80B.A3B";
-        case LLM_TYPE_100B_A6B:      return "100B.A6B";
-        case LLM_TYPE_102B_A12B:     return "102B.A12B";
-        case LLM_TYPE_106B_A12B:     return "106B.A12B";
-        case LLM_TYPE_230B_A10B:     return "230B.A10B";
-        case LLM_TYPE_235B_A22B:     return "235B.A22B";
-        case LLM_TYPE_300B_A47B:     return "300B.A47B";
-        case LLM_TYPE_310B_A15B:     return "310B.A15B";
-        case LLM_TYPE_355B_A32B:     return "355B.A32B";
-        case LLM_TYPE_E2B:           return "E2B";
-        case LLM_TYPE_E4B:           return "E4B";
+        case LFG_TYPE_14M:           return "14M";
+        case LFG_TYPE_17M:           return "17M";
+        case LFG_TYPE_22M:           return "22M";
+        case LFG_TYPE_33M:           return "33M";
+        case LFG_TYPE_47M:           return "47M";
+        case LFG_TYPE_60M:           return "60M";
+        case LFG_TYPE_70M:           return "70M";
+        case LFG_TYPE_80M:           return "80M";
+        case LFG_TYPE_109M:          return "109M";
+        case LFG_TYPE_137M:          return "137M";
+        case LFG_TYPE_140M:          return "140M";
+        case LFG_TYPE_149M:          return "149M";
+        case LFG_TYPE_160M:          return "160M";
+        case LFG_TYPE_190M:          return "190M";
+        case LFG_TYPE_220M:          return "220M";
+        case LFG_TYPE_250M:          return "250M";
+        case LFG_TYPE_256M:          return "256M";
+        case LFG_TYPE_270M:          return "270M";
+        case LFG_TYPE_335M:          return "335M";
+        case LFG_TYPE_350M:          return "350M";
+        case LFG_TYPE_360M:          return "360M";
+        case LFG_TYPE_395M:          return "395M";
+        case LFG_TYPE_410M:          return "410M";
+        case LFG_TYPE_450M:          return "450M";
+        case LFG_TYPE_475M:          return "475M";
+        case LFG_TYPE_558M:          return "558M";
+        case LFG_TYPE_700M:          return "700M";
+        case LFG_TYPE_770M:          return "770M";
+        case LFG_TYPE_780M:          return "780M";
+        case LFG_TYPE_950M:          return "950M";
+        case LFG_TYPE_0_3B:          return "0.3B";
+        case LFG_TYPE_0_5B:          return "0.5B";
+        case LFG_TYPE_0_6B:          return "0.6B";
+        case LFG_TYPE_1B:            return "1B";
+        case LFG_TYPE_1_2B:          return "1.2B";
+        case LFG_TYPE_1_3B:          return "1.3B";
+        case LFG_TYPE_1_4B:          return "1.4B";
+        case LFG_TYPE_1_5B:          return "1.5B";
+        case LFG_TYPE_1_6B:          return "1.6B";
+        case LFG_TYPE_1_7B:          return "1.7B";
+        case LFG_TYPE_1_8B:          return "1.8B";
+        case LFG_TYPE_2B:            return "2B";
+        case LFG_TYPE_2_6B:          return "2.6B";
+        case LFG_TYPE_2_8B:          return "2.8B";
+        case LFG_TYPE_2_9B:          return "2.9B";
+        case LFG_TYPE_3B:            return "3B";
+        case LFG_TYPE_4B:            return "4B";
+        case LFG_TYPE_6B:            return "6B";
+        case LFG_TYPE_6_9B:          return "6.9B";
+        case LFG_TYPE_7B:            return "7B";
+        case LFG_TYPE_8B:            return "8B";
+        case LFG_TYPE_9B:            return "9B";
+        case LFG_TYPE_11B:           return "11B";
+        case LFG_TYPE_12B:           return "12B";
+        case LFG_TYPE_13B:           return "13B";
+        case LFG_TYPE_14B:           return "14B";
+        case LFG_TYPE_15B:           return "15B";
+        case LFG_TYPE_16B:           return "16B";
+        case LFG_TYPE_20B:           return "20B";
+        case LFG_TYPE_26B:           return "26B";
+        case LFG_TYPE_27B:           return "27B";
+        case LFG_TYPE_30B:           return "30B";
+        case LFG_TYPE_32B:           return "32B";
+        case LFG_TYPE_34B:           return "34B";
+        case LFG_TYPE_35B:           return "35B";
+        case LFG_TYPE_36B:           return "36B";
+        case LFG_TYPE_40B:           return "40B";
+        case LFG_TYPE_65B:           return "65B";
+        case LFG_TYPE_70B:           return "70B";
+        case LFG_TYPE_120B:          return "120B";
+        case LFG_TYPE_142B:          return "142B";
+        case LFG_TYPE_236B:          return "236B";
+        case LFG_TYPE_290B:          return "290B";
+        case LFG_TYPE_314B:          return "314B";
+        case LFG_TYPE_405B:          return "405B";
+        case LFG_TYPE_671B:          return "671B";
+        case LFG_TYPE_SMALL:         return "0.1B";
+        case LFG_TYPE_MEDIUM:        return "0.4B";
+        case LFG_TYPE_LARGE:         return "0.8B";
+        case LFG_TYPE_XL:            return "1.5B";
+        case LFG_TYPE_A1_7B:         return "A1.7B";
+        case LFG_TYPE_A2_7B:         return "A2.7B";
+        case LFG_TYPE_8x7B:          return "8x7B";
+        case LFG_TYPE_8x22B:         return "8x22B";
+        case LFG_TYPE_16x12B:        return "16x12B";
+        case LFG_TYPE_16x3_8B:       return "16x3.8B";
+        case LFG_TYPE_10B_128x3_66B: return "10B+128x3.66B";
+        case LFG_TYPE_57B_A14B:      return "57B.A14B";
+        case LFG_TYPE_17B_16E:       return "17Bx16E (Scout)";
+        case LFG_TYPE_17B_128E:      return "17Bx128E (Maverick)";
+        case LFG_TYPE_A13B:          return "A13B";
+        case LFG_TYPE_7B_A1B:        return "7B.A1B";
+        case LFG_TYPE_8B_A1B:        return "8B.A1B";
+        case LFG_TYPE_16B_A1B:       return "16B.A1B";
+        case LFG_TYPE_21B_A3B:       return "21B.A3B";
+        case LFG_TYPE_30B_A3B:       return "30B.A3B";
+        case LFG_TYPE_31B_A3_5B:     return "31B.A3.5B";
+        case LFG_TYPE_80B_A3B:       return "80B.A3B";
+        case LFG_TYPE_100B_A6B:      return "100B.A6B";
+        case LFG_TYPE_102B_A12B:     return "102B.A12B";
+        case LFG_TYPE_106B_A12B:     return "106B.A12B";
+        case LFG_TYPE_230B_A10B:     return "230B.A10B";
+        case LFG_TYPE_235B_A22B:     return "235B.A22B";
+        case LFG_TYPE_300B_A47B:     return "300B.A47B";
+        case LFG_TYPE_310B_A15B:     return "310B.A15B";
+        case LFG_TYPE_355B_A32B:     return "355B.A32B";
+        case LFG_TYPE_E2B:           return "E2B";
+        case LFG_TYPE_E4B:           return "E4B";
         default:                     return "?B";
     }
 }
@@ -187,7 +187,7 @@ static bool weight_buft_supported(const lfg_hparams & hparams, ggml_tensor * w, 
     };
     ggml_context_ptr ctx_ptr { ggml_init(params) };
     if (!ctx_ptr) {
-        throw std::runtime_error(format("failed to create ggml context"));
+        throw std::runtime_error(lfg_format("failed to create ggml context"));
     }
     ggml_context * ctx = ctx_ptr.get();
 
@@ -363,7 +363,7 @@ static buft_list_t make_cpu_buft_list(const std::vector<ggml_backend_dev_t> & de
     if (use_extra_bufts) {
         auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
         if (cpu_dev == nullptr) {
-            throw std::runtime_error(format("%s: no CPU backend found", __func__));
+            throw std::runtime_error(lfg_format("%s: no CPU backend found", __func__));
         }
 
         auto * cpu_reg = ggml_backend_dev_backend_reg(cpu_dev);
@@ -406,7 +406,7 @@ static buft_list_t make_gpu_buft_list(ggml_backend_dev_t dev, lfg_split_mode spl
                         return i;
                     }
                 }
-                throw std::runtime_error(format("device %s not found in its backend reg", ggml_backend_dev_name(dev)));
+                throw std::runtime_error(lfg_format("device %s not found in its backend reg", ggml_backend_dev_name(dev)));
             }();
             auto * buft = ggml_backend_split_buffer_type_fn(dev_index, tensor_split);
             if (buft != nullptr) {
@@ -486,7 +486,7 @@ void lfg_model::load_stats(lfg_model_loader & ml) {
 
 void lfg_model::load_arch(lfg_model_loader & ml) {
     arch = ml.get_arch();
-    if (arch == LLM_ARCH_UNKNOWN) {
+    if (arch == LFG_ARCH_UNKNOWN) {
         throw std::runtime_error("unknown model architecture: '" + ml.get_arch_name() + "'");
     }
 }
@@ -501,12 +501,12 @@ void lfg_model::load_hparams(lfg_model_loader & ml) {
             continue;
         }
         const char * name = gguf_get_key(ctx, i);
-        const std::string value = gguf_kv_to_str(ctx, i);
+        const std::string value = lfg_gguf_kv_to_str(ctx, i);
         gguf_kv.emplace(name, value);
     }
 
     // get general kv
-    ml.get_key(LLM_KV_GENERAL_NAME, name, false);
+    ml.get_key(LFG_KV_GENERAL_NAME, name, false);
 
     // everything past this point is not vocab-related
     // for CLIP models, we only need to load tensors, no hparams
@@ -514,23 +514,23 @@ void lfg_model::load_hparams(lfg_model_loader & ml) {
         return;
     }
 
-    ml.get_key(LLM_KV_CONTEXT_LENGTH,          hparams.n_ctx_train);
-    ml.get_key(LLM_KV_EMBEDDING_LENGTH,        hparams.n_embd);
-    ml.get_key(LLM_KV_EMBEDDING_LENGTH_OUT,    hparams.n_embd_out, false);
-    ml.get_key(LLM_KV_BLOCK_COUNT,             hparams.n_layer);
-    ml.get_key(LLM_KV_EXPERT_COUNT,            hparams.n_expert,        false);
-    ml.get_key(LLM_KV_EXPERT_USED_COUNT,       hparams.n_expert_used,   false);
-    ml.get_key(LLM_KV_EXPERT_GROUP_COUNT,      hparams.n_expert_groups, false);
-    ml.get_key(LLM_KV_EXPERT_GROUP_USED_COUNT, hparams.n_group_used,    false);
+    ml.get_key(LFG_KV_CONTEXT_LENGTH,          hparams.n_ctx_train);
+    ml.get_key(LFG_KV_EMBEDDING_LENGTH,        hparams.n_embd);
+    ml.get_key(LFG_KV_EMBEDDING_LENGTH_OUT,    hparams.n_embd_out, false);
+    ml.get_key(LFG_KV_BLOCK_COUNT,             hparams.n_layer);
+    ml.get_key(LFG_KV_EXPERT_COUNT,            hparams.n_expert,        false);
+    ml.get_key(LFG_KV_EXPERT_USED_COUNT,       hparams.n_expert_used,   false);
+    ml.get_key(LFG_KV_EXPERT_GROUP_COUNT,      hparams.n_expert_groups, false);
+    ml.get_key(LFG_KV_EXPERT_GROUP_USED_COUNT, hparams.n_group_used,    false);
 
     if (false) {
-        ml.get_key(LLM_KV_FEATURES_LENGTH, hparams.n_embd_features);
+        ml.get_key(LFG_KV_FEATURES_LENGTH, hparams.n_embd_features);
 
-        ml.get_key(LLM_KV_POSNET_EMBEDDING_LENGTH, hparams.posnet.n_embd);
-        ml.get_key(LLM_KV_POSNET_BLOCK_COUNT,      hparams.posnet.n_layer);
+        ml.get_key(LFG_KV_POSNET_EMBEDDING_LENGTH, hparams.posnet.n_embd);
+        ml.get_key(LFG_KV_POSNET_BLOCK_COUNT,      hparams.posnet.n_layer);
 
-        ml.get_key(LLM_KV_CONVNEXT_EMBEDDING_LENGTH, hparams.convnext.n_embd);
-        ml.get_key(LLM_KV_CONVNEXT_BLOCK_COUNT,      hparams.convnext.n_layer);
+        ml.get_key(LFG_KV_CONVNEXT_EMBEDDING_LENGTH, hparams.convnext.n_embd);
+        ml.get_key(LFG_KV_CONVNEXT_BLOCK_COUNT,      hparams.convnext.n_layer);
     }
 
     GGML_ASSERT(hparams.n_expert <= LFG_MAX_EXPERTS);
@@ -554,7 +554,7 @@ void lfg_model::load_hparams(lfg_model_loader & ml) {
     std::fill(
         hparams.recurrent_layer_arr.begin(),
         hparams.recurrent_layer_arr.end(),
-        llm_arch_is_recurrent(ml.get_arch()));
+        lfg_arch_is_recurrent(ml.get_arch()));
 
     std::fill(hparams.rope_sections.begin(), hparams.rope_sections.end(), 0);
     std::fill(hparams.swa_layers.begin(), hparams.swa_layers.end(), 0);
@@ -564,40 +564,40 @@ void lfg_model::load_hparams(lfg_model_loader & ml) {
     std::fill(hparams.xielu_beta.begin(), hparams.xielu_beta.end(), 0.0f);
     std::fill(hparams.xielu_eps.begin(), hparams.xielu_eps.end(), 0.0f);
 
-    ml.get_key_or_arr(LLM_KV_FEED_FORWARD_LENGTH,  hparams.n_ff_arr,   hparams.n_layer, false);
-    ml.get_key_or_arr(LLM_KV_ATTENTION_HEAD_COUNT, hparams.n_head_arr, hparams.n_layer, false);
+    ml.get_key_or_arr(LFG_KV_FEED_FORWARD_LENGTH,  hparams.n_ff_arr,   hparams.n_layer, false);
+    ml.get_key_or_arr(LFG_KV_ATTENTION_HEAD_COUNT, hparams.n_head_arr, hparams.n_layer, false);
 
     // n_head_kv is optional, default to n_head
     hparams.n_head_kv_arr = hparams.n_head_arr;
 
-    ml.get_key_or_arr(LLM_KV_ATTENTION_HEAD_COUNT_KV, hparams.n_head_kv_arr, hparams.n_layer, false);
+    ml.get_key_or_arr(LFG_KV_ATTENTION_HEAD_COUNT_KV, hparams.n_head_kv_arr, hparams.n_layer, false);
 
     bool rope_finetuned = false;
-    ml.get_key(LLM_KV_ROPE_SCALING_FINETUNED, rope_finetuned, false);
+    ml.get_key(LFG_KV_ROPE_SCALING_FINETUNED, rope_finetuned, false);
     hparams.rope_finetuned = rope_finetuned;
 
     hparams.n_ctx_orig_yarn = hparams.n_ctx_train;
-    ml.get_key(LLM_KV_ROPE_SCALING_ORIG_CTX_LEN, hparams.n_ctx_orig_yarn, false);
+    ml.get_key(LFG_KV_ROPE_SCALING_ORIG_CTX_LEN, hparams.n_ctx_orig_yarn, false);
 
     // rope_freq_base (optional)
     hparams.rope_freq_base_train = 10000.0f;
-    ml.get_key(LLM_KV_ROPE_FREQ_BASE, hparams.rope_freq_base_train, false);
+    ml.get_key(LFG_KV_ROPE_FREQ_BASE, hparams.rope_freq_base_train, false);
 
     std::string rope_scaling("linear");
-    ml.get_key(LLM_KV_ROPE_SCALING_TYPE, rope_scaling, false);
+    ml.get_key(LFG_KV_ROPE_SCALING_TYPE, rope_scaling, false);
     hparams.rope_scaling_type_train = lfg_rope_scaling_type_from_string(rope_scaling);
     GGML_ASSERT(hparams.rope_scaling_type_train != LFG_ROPE_SCALING_TYPE_UNSPECIFIED);
 
     // TODO: Handle SWA metadata similarly when models start implementing it
     // rope_freq_scale (inverse of the kv) is optional
     float ropescale = 0.0f;
-    if (!ml.get_key(LLM_KV_ROPE_SCALING_FACTOR, ropescale, false)) {
+    if (!ml.get_key(LFG_KV_ROPE_SCALING_FACTOR, ropescale, false)) {
         // try the old key name
-        ml.get_key(LLM_KV_ROPE_SCALE_LINEAR, ropescale, false);
+        ml.get_key(LFG_KV_ROPE_SCALE_LINEAR, ropescale, false);
     }
     hparams.rope_freq_scale_train = ropescale == 0.0f ? 1.0f : 1.0f/ropescale;
 
-    ml.get_key(LLM_KV_ROPE_SCALING_ATTN_FACTOR, hparams.rope_attn_factor, false);
+    ml.get_key(LFG_KV_ROPE_SCALING_ATTN_FACTOR, hparams.rope_attn_factor, false);
 
     // non-transformer models do not have attention heads
     if (hparams.n_head() > 0) {
@@ -605,19 +605,19 @@ void lfg_model::load_hparams(lfg_model_loader & ml) {
         // gpt-j n_rot = rotary_dim
 
         hparams.n_embd_head_k = hparams.n_embd / hparams.n_head();
-        ml.get_key(LLM_KV_ATTENTION_KEY_LENGTH, hparams.n_embd_head_k, false);
+        ml.get_key(LFG_KV_ATTENTION_KEY_LENGTH, hparams.n_embd_head_k, false);
 
         hparams.n_embd_head_v = hparams.n_embd / hparams.n_head();
-        ml.get_key(LLM_KV_ATTENTION_VALUE_LENGTH, hparams.n_embd_head_v, false);
+        ml.get_key(LFG_KV_ATTENTION_VALUE_LENGTH, hparams.n_embd_head_v, false);
 
         // sanity check for n_rot (optional)
         hparams.n_rot = hparams.n_embd_head_k;
 
-        ml.get_key(LLM_KV_ROPE_DIMENSION_COUNT, hparams.n_rot, false);
+        ml.get_key(LFG_KV_ROPE_DIMENSION_COUNT, hparams.n_rot, false);
 
         if (false) {
             if (hparams.n_rot != hparams.n_embd_head_k) {
-                throw std::runtime_error(format("invalid n_rot: %u, expected %u", hparams.n_rot, hparams.n_embd_head_k));
+                throw std::runtime_error(lfg_format("invalid n_rot: %u, expected %u", hparams.n_rot, hparams.n_embd_head_k));
             }
         }
     } else {
@@ -628,52 +628,52 @@ void lfg_model::load_hparams(lfg_model_loader & ml) {
 
     // for differentiating model types
     uint32_t n_vocab = 0;
-    ml.get_key(LLM_KV_VOCAB_SIZE, n_vocab, false) || ml.get_arr_n(LLM_KV_TOKENIZER_LIST, n_vocab, false);
+    ml.get_key(LFG_KV_VOCAB_SIZE, n_vocab, false) || ml.get_arr_n(LFG_KV_TOKENIZER_LIST, n_vocab, false);
 
     // for classifier models
-    ml.get_arr(LLM_KV_CLASSIFIER_OUTPUT_LABELS, classifier_labels, false);
+    ml.get_arr(LFG_KV_CLASSIFIER_OUTPUT_LABELS, classifier_labels, false);
     if (!classifier_labels.empty()) {
         hparams.n_cls_out = classifier_labels.size();
     }
 
     // arch-specific KVs
     switch (arch) {
-        case LLM_ARCH_LFM2:
+        case LFG_ARCH_LFM2:
             {
-                ml.get_key(LLM_KV_SHORTCONV_L_CACHE,           hparams.n_shortconv_l_cache);
-                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                ml.get_key(LFG_KV_SHORTCONV_L_CACHE,           hparams.n_shortconv_l_cache);
+                ml.get_key(LFG_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
                 for (uint32_t il = 0; il < hparams.n_layer; ++il) {
                     hparams.recurrent_layer_arr[il] = hparams.n_head_kv(il) == 0;
                 }
                 hparams.n_layer_dense_lead = hparams.n_layer;
                 switch (hparams.n_ff()) {
-                    case  4608: type = LLM_TYPE_350M; break;
-                    case  6912: type = LLM_TYPE_700M; break;
-                    case  8192: type = LLM_TYPE_1_2B; break;
-                    case 10752: type = LLM_TYPE_2_6B; break;
-                    default:    type = LLM_TYPE_UNKNOWN;
+                    case  4608: type = LFG_TYPE_350M; break;
+                    case  6912: type = LFG_TYPE_700M; break;
+                    case  8192: type = LFG_TYPE_1_2B; break;
+                    case 10752: type = LFG_TYPE_2_6B; break;
+                    default:    type = LFG_TYPE_UNKNOWN;
                 }
 
-                if (const auto is_swa = ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false); is_swa) {
+                if (const auto is_swa = ml.get_key(LFG_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false); is_swa) {
                     hparams.swa_type = LFG_SWA_TYPE_STANDARD;
                     for (uint32_t il = 0; il < hparams.n_layer; ++il) {
                         hparams.swa_layers[il] = !hparams.recurrent_layer_arr[il];
                     }
                 }
             } break;
-        case LLM_ARCH_LFM2MOE:
+        case LFG_ARCH_LFM2MOE:
             {
-                ml.get_key(LLM_KV_SHORTCONV_L_CACHE,           hparams.n_shortconv_l_cache);
-                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
-                ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,   hparams.n_layer_dense_lead);
-                ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,  hparams.n_ff_exp);
-                ml.get_key(LLM_KV_EXPERT_GATING_FUNC,          hparams.expert_gating_func);
+                ml.get_key(LFG_KV_SHORTCONV_L_CACHE,           hparams.n_shortconv_l_cache);
+                ml.get_key(LFG_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                ml.get_key(LFG_KV_LEADING_DENSE_BLOCK_COUNT,   hparams.n_layer_dense_lead);
+                ml.get_key(LFG_KV_EXPERT_FEED_FORWARD_LENGTH,  hparams.n_ff_exp);
+                ml.get_key(LFG_KV_EXPERT_GATING_FUNC,          hparams.expert_gating_func);
 
                 for (uint32_t il = 0; il < hparams.n_layer; ++il) {
                     hparams.recurrent_layer_arr[il] = hparams.n_head_kv(il) == 0;
                 }
 
-                if (const auto is_swa = ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false); is_swa) {
+                if (const auto is_swa = ml.get_key(LFG_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false); is_swa) {
                     hparams.swa_type = LFG_SWA_TYPE_STANDARD;
                     for (uint32_t il = 0; il < hparams.n_layer; ++il) {
                         hparams.swa_layers[il] = !hparams.recurrent_layer_arr[il];
@@ -681,13 +681,13 @@ void lfg_model::load_hparams(lfg_model_loader & ml) {
                 }
 
                 if (hparams.n_embd == 2048 && hparams.n_ff_exp == 1792) {
-                    type = LLM_TYPE_8B_A1B;
+                    type = LFG_TYPE_8B_A1B;
                 } else if (hparams.n_embd == 2048 && hparams.n_ff_exp == 1536) {
-                    type = LLM_TYPE_7B_A1B;
+                    type = LFG_TYPE_7B_A1B;
                 } else if (hparams.n_embd == 3072 && hparams.n_ff_exp == 2048) {
-                    type = LLM_TYPE_16B_A1B;
+                    type = LFG_TYPE_16B_A1B;
                 } else {
-                    type = LLM_TYPE_UNKNOWN;
+                    type = LFG_TYPE_UNKNOWN;
                 }
             } break;
         default: (void)0;
@@ -704,7 +704,7 @@ void lfg_model::load_hparams(lfg_model_loader & ml) {
 }
 
 void lfg_model::load_vocab(lfg_model_loader & ml) {
-    const auto kv = LLM_KV(arch);
+    const auto kv = LFG_KV(arch);
 
     vocab.load(ml, kv);
 }
@@ -733,7 +733,7 @@ bool lfg_model::load_tensors(lfg_model_loader & ml) {
 
     ggml_backend_dev_t cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
     if (cpu_dev == nullptr) {
-        throw std::runtime_error(format("%s: no CPU backend found", __func__));
+        throw std::runtime_error(lfg_format("%s: no CPU backend found", __func__));
     }
 
     // calculate the split points
@@ -822,7 +822,7 @@ bool lfg_model::load_tensors(lfg_model_loader & ml) {
 
             ggml_context * ctx = ggml_init(params);
             if (!ctx) {
-                throw std::runtime_error(format("failed to create ggml context"));
+                throw std::runtime_error(lfg_format("failed to create ggml context"));
             }
 
             ctx_map.emplace(buft, ctx);
@@ -864,29 +864,29 @@ bool lfg_model::load_tensors(lfg_model_loader & ml) {
         ggml_backend_buffer_type_t first_moved_from_buft = nullptr;
         ggml_backend_buffer_type_t first_moved_to_buft = nullptr;
 
-        auto create_tensor = [&](const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags) -> ggml_tensor * {
+        auto create_tensor = [&](const LFG_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags) -> ggml_tensor * {
             ggml_tensor * t_meta = ml.get_tensor_meta(tn.str().c_str());
 
             if (!t_meta) {
                 if (flags & TENSOR_NOT_REQUIRED) {
                     return nullptr;
                 }
-                throw std::runtime_error(format("missing tensor '%s'", tn.str().c_str()));
+                throw std::runtime_error(lfg_format("missing tensor '%s'", tn.str().c_str()));
             }
 
             // some models use the token embedding tensor as the output, but since these are used in different layers and with different ops
             // the tensor is duplicated
             // to handle this, we check if the tensor is duplicated, and if so, we assume that it is being loaded as the output tensor
-            llm_tensor tn_tensor = tn.tensor;
-            if (tn.tensor == LLM_TENSOR_TOKEN_EMBD && flags & TENSOR_DUPLICATED) {
-                tn_tensor = LLM_TENSOR_OUTPUT;
+            lfg_tensor_enum tn_tensor = tn.tensor;
+            if (tn.tensor == LFG_TENSOR_TOKEN_EMBD && flags & TENSOR_DUPLICATED) {
+                tn_tensor = LFG_TENSOR_OUTPUT;
             }
 
-            llm_tensor_info info;
+            lfg_tensor_info info;
             try {
-                info = llm_tensor_info_for(tn_tensor);
+                info = lfg_tensor_info_for(tn_tensor);
             } catch (const std::out_of_range & e) {
-                throw std::runtime_error(format("missing tensor info mapping for %s", tn.str().c_str()));
+                throw std::runtime_error(lfg_format("missing tensor info mapping for %s", tn.str().c_str()));
             }
 
             // skip unused tensors
@@ -914,7 +914,7 @@ bool lfg_model::load_tensors(lfg_model_loader & ml) {
             }
 
             // sanity checks
-            if (info.layer == LLM_TENSOR_LAYER_INPUT || info.layer == LLM_TENSOR_LAYER_OUTPUT) {
+            if (info.layer == LFG_TENSOR_LAYER_INPUT || info.layer == LFG_TENSOR_LAYER_OUTPUT) {
                 if (tn.bid != -1) {
                     lfg_set_last_error(LFG_ERROR_INVALID_ARGUMENT, "%s: input/output tensor %s used with layer number", __func__, tn.str().c_str());
                     throw std::runtime_error("input/output layer tensor used with a layer number");
@@ -929,13 +929,13 @@ bool lfg_model::load_tensors(lfg_model_loader & ml) {
             // select the buffer type for this tensor
             buft_list_t * buft_list;
             switch (info.layer) {
-                case LLM_TENSOR_LAYER_INPUT:
+                case LFG_TENSOR_LAYER_INPUT:
                     buft_list = pimpl->dev_input.buft_list;
                     break;
-                case LLM_TENSOR_LAYER_OUTPUT:
+                case LFG_TENSOR_LAYER_OUTPUT:
                     buft_list = pimpl->dev_output.buft_list;
                     break;
-                case LLM_TENSOR_LAYER_REPEATING:
+                case LFG_TENSOR_LAYER_REPEATING:
                     buft_list = pimpl->dev_layer.at(tn.bid).buft_list;
                     break;
                 default:
@@ -970,7 +970,7 @@ bool lfg_model::load_tensors(lfg_model_loader & ml) {
             if (!buft) {
                 buft = select_weight_buft(hparams, t_meta, op, *buft_list);
                 if (!buft) {
-                    throw std::runtime_error(format("failed to find a compatible buffer type for tensor %s", tn.str().c_str()));
+                    throw std::runtime_error(lfg_format("failed to find a compatible buffer type for tensor %s", tn.str().c_str()));
                 }
             }
 
@@ -1008,18 +1008,18 @@ bool lfg_model::load_tensors(lfg_model_loader & ml) {
         layers.resize(n_layer);
 
         // TODO: move to a separate function
-        const auto tn = LLM_TN(arch);
+        const auto tn = LFG_TN(arch);
         switch (arch) {
-            case LLM_ARCH_LFM2:
-            case LLM_ARCH_LFM2MOE:
+            case LFG_ARCH_LFM2:
+            case LFG_ARCH_LFM2MOE:
                 {
-                    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
+                    tok_embd = create_tensor(tn(LFG_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
-                    output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM_LFM2, "weight"), {n_embd}, 0);
-                    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,           "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
+                    output_norm = create_tensor(tn(LFG_TENSOR_OUTPUT_NORM_LFM2, "weight"), {n_embd}, 0);
+                    output      = create_tensor(tn(LFG_TENSOR_OUTPUT,           "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
 
                     if (output == NULL) {
-                        output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
+                        output = create_tensor(tn(LFG_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
                     }
 
                     for (uint32_t i = 0; i < n_layer; ++i) {
@@ -1028,43 +1028,43 @@ bool lfg_model::load_tensors(lfg_model_loader & ml) {
                         const bool is_moe_layer = i >= hparams.n_layer_dense_lead;
 
                         // ffn/moe is same for transformer and conv layers
-                        layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
+                        layer.ffn_norm = create_tensor(tn(LFG_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
                         if (is_moe_layer) {
                             GGML_ASSERT(n_expert && n_expert_used);
-                            layer.ffn_gate_inp    = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP, "weight", i),  {n_embd, n_expert}, 0);
-                            layer.ffn_gate_exps   = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {n_embd, hparams.n_ff_exp, n_expert}, 0);
-                            layer.ffn_down_exps   = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {hparams.n_ff_exp,   n_embd, n_expert}, 0);
-                            layer.ffn_up_exps     = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS, "weight", i),   {n_embd, hparams.n_ff_exp, n_expert}, 0);
-                            layer.ffn_exp_probs_b = create_tensor(tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), {n_expert}, 0);
+                            layer.ffn_gate_inp    = create_tensor(tn(LFG_TENSOR_FFN_GATE_INP, "weight", i),  {n_embd, n_expert}, 0);
+                            layer.ffn_gate_exps   = create_tensor(tn(LFG_TENSOR_FFN_GATE_EXPS, "weight", i), {n_embd, hparams.n_ff_exp, n_expert}, 0);
+                            layer.ffn_down_exps   = create_tensor(tn(LFG_TENSOR_FFN_DOWN_EXPS, "weight", i), {hparams.n_ff_exp,   n_embd, n_expert}, 0);
+                            layer.ffn_up_exps     = create_tensor(tn(LFG_TENSOR_FFN_UP_EXPS, "weight", i),   {n_embd, hparams.n_ff_exp, n_expert}, 0);
+                            layer.ffn_exp_probs_b = create_tensor(tn(LFG_TENSOR_FFN_EXP_PROBS_B, "bias", i), {n_expert}, 0);
                         } else {  // dense
-                            layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
-                            layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
-                            layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
+                            layer.ffn_gate = create_tensor(tn(LFG_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
+                            layer.ffn_down = create_tensor(tn(LFG_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
+                            layer.ffn_up   = create_tensor(tn(LFG_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
                         }
 
                         // for operator_norm
-                        layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
+                        layer.attn_norm = create_tensor(tn(LFG_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
 
                         if (!hparams.is_recurrent(i)) {
-                            layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k}, 0);
-                            layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k}, 0);
+                            layer.attn_q_norm = create_tensor(tn(LFG_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k}, 0);
+                            layer.attn_k_norm = create_tensor(tn(LFG_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k}, 0);
                             GGML_ASSERT(n_embd_v_gqa == n_embd_k_gqa);
 
-                            layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q, "weight", i), {n_embd, n_embd}, 0);
-                            layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K, "weight", i), {n_embd, hparams.n_embd_k_gqa(i)}, 0);
-                            layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V, "weight", i), {n_embd, hparams.n_embd_v_gqa(i)}, 0);
+                            layer.wq = create_tensor(tn(LFG_TENSOR_ATTN_Q, "weight", i), {n_embd, n_embd}, 0);
+                            layer.wk = create_tensor(tn(LFG_TENSOR_ATTN_K, "weight", i), {n_embd, hparams.n_embd_k_gqa(i)}, 0);
+                            layer.wv = create_tensor(tn(LFG_TENSOR_ATTN_V, "weight", i), {n_embd, hparams.n_embd_v_gqa(i)}, 0);
 
-                            layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd}, 0);
+                            layer.wo = create_tensor(tn(LFG_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd}, 0);
                         } else {
-                            layer.shortconv.conv     = create_tensor(tn(LLM_TENSOR_SHORTCONV_CONV,    "weight", i), {hparams.n_shortconv_l_cache, n_embd}, 0);
-                            layer.shortconv.in_proj  = create_tensor(tn(LLM_TENSOR_SHORTCONV_INPROJ,  "weight", i), {n_embd, 3 * n_embd}, 0);
-                            layer.shortconv.out_proj = create_tensor(tn(LLM_TENSOR_SHORTCONV_OUTPROJ, "weight", i), {n_embd, n_embd}, 0);
+                            layer.shortconv.conv     = create_tensor(tn(LFG_TENSOR_SHORTCONV_CONV,    "weight", i), {hparams.n_shortconv_l_cache, n_embd}, 0);
+                            layer.shortconv.in_proj  = create_tensor(tn(LFG_TENSOR_SHORTCONV_INPROJ,  "weight", i), {n_embd, 3 * n_embd}, 0);
+                            layer.shortconv.out_proj = create_tensor(tn(LFG_TENSOR_SHORTCONV_OUTPROJ, "weight", i), {n_embd, n_embd}, 0);
                         }
                     }
 
                     // for LFM2-ColBert-350M
-                    dense_2_out_layers   = create_tensor(tn(LLM_TENSOR_DENSE_2_OUT, "weight"), {n_embd, hparams.get_n_embd_out()}, TENSOR_NOT_REQUIRED);
-                    dense_2_out_layers_b = create_tensor(tn(LLM_TENSOR_DENSE_2_OUT, "bias"),   {hparams.get_n_embd_out()}, TENSOR_NOT_REQUIRED);
+                    dense_2_out_layers   = create_tensor(tn(LFG_TENSOR_DENSE_2_OUT, "weight"), {n_embd, hparams.get_n_embd_out()}, TENSOR_NOT_REQUIRED);
+                    dense_2_out_layers_b = create_tensor(tn(LFG_TENSOR_DENSE_2_OUT, "bias"),   {hparams.get_n_embd_out()}, TENSOR_NOT_REQUIRED);
                 } break;
             default:
                 throw std::runtime_error("unknown architecture");
@@ -1107,7 +1107,7 @@ bool lfg_model::load_tensors(lfg_model_loader & ml) {
             // FIXME: workaround for CPU backend buft having a NULL device
             dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
             if (!dev) {
-                throw std::runtime_error(format("%s: no CPU backend found", __func__));
+                throw std::runtime_error(lfg_format("%s: no CPU backend found", __func__));
             }
         }
         ggml_backend_dev_props props;
@@ -1132,7 +1132,7 @@ bool lfg_model::load_tensors(lfg_model_loader & ml) {
                 const size_t max_size = ggml_get_max_tensor_size(ctx);
                 ggml_backend_buffer_t buf = ggml_backend_dev_buffer_from_host_ptr(dev, (char *) addr + first, last - first, max_size);
                 if (buf == nullptr) {
-                    throw std::runtime_error(format("unable to allocate %s buffer", ggml_backend_buft_name(buft)));
+                    throw std::runtime_error(lfg_format("unable to allocate %s buffer", ggml_backend_buft_name(buft)));
                 }
                 bufs.emplace_back(buf);
                 buf_map.emplace(idx, buf);
@@ -1148,7 +1148,7 @@ bool lfg_model::load_tensors(lfg_model_loader & ml) {
                 buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft); // real buffer
             }
             if (buf == nullptr) {
-                throw std::runtime_error(format("unable to allocate %s buffer", ggml_backend_buft_name(buft)));
+                throw std::runtime_error(lfg_format("unable to allocate %s buffer", ggml_backend_buft_name(buft)));
             }
             if (use_mlock && ggml_backend_buffer_is_host(buf)) {
                 pimpl->mlock_bufs.emplace_back(new lfg_mlock);
@@ -1224,11 +1224,11 @@ bool lfg_model::load_tensors(lfg_model_loader & ml) {
 }
 
 std::string lfg_model::arch_name() const {
-    return llm_arch_name(arch);
+    return lfg_arch_name(arch);
 }
 
 std::string lfg_model::type_name() const {
-    return llm_type_name(type);
+    return lfg_type_name(type);
 }
 
 std::string lfg_model::desc() const {
@@ -1434,7 +1434,7 @@ void lfg_model::print_info() const {
         LFG_LOG_INFO("{}: nextn_predict_layers  = {}\n",     __func__, hparams.nextn_predict_layers);
     }
 
-    if (arch == LLM_ARCH_LFM2MOE) {
+    if (arch == LFG_ARCH_LFM2MOE) {
         LFG_LOG_INFO("{}: n_ff_exp              = {}\n",     __func__, hparams.n_ff_exp);
         LFG_LOG_INFO("{}: expert_gating_func    = {}\n",     __func__, lfg_expert_gating_func_name((lfg_expert_gating_func_type) hparams.expert_gating_func));
     }
@@ -1470,7 +1470,7 @@ static bool buft_supported(ggml_backend_buffer_type_t buft, ggml_backend_dev_t d
 
     ggml_context_ptr ctx { ggml_init(init_params) };
     if (!ctx) {
-        throw std::runtime_error(format("failed to create ggml context"));
+        throw std::runtime_error(lfg_format("failed to create ggml context"));
     }
 
     ggml_backend_buffer_ptr buf { ggml_backend_buft_alloc_buffer(buft, 0) };
@@ -1497,7 +1497,7 @@ static ggml_backend_buffer_type_t select_buft(const buft_list_t & buft_list, con
         }
     }
 
-    throw std::runtime_error(format("no suitable buffer type found"));
+    throw std::runtime_error(lfg_format("no suitable buffer type found"));
 }
 
 ggml_backend_buffer_type_t lfg_model::select_buft(uint32_t il) const {
@@ -1569,7 +1569,7 @@ lfg_memory_i * lfg_model::create_memory(const lfg_memory_params & mem_params, co
         // switch statement
         default:
             {
-                if (llm_arch_is_recurrent(arch)) {
+                if (lfg_arch_is_recurrent(arch)) {
                     res = new lfg_memory_recurrent(
                             *this,
                             GGML_TYPE_F32,
@@ -1578,7 +1578,7 @@ lfg_memory_i * lfg_model::create_memory(const lfg_memory_params & mem_params, co
                             std::max((uint32_t) 1, cparams.n_seq_max),
                             cparams.n_seq_max,
                             nullptr);
-                } else if (llm_arch_is_hybrid(arch)) {
+                } else if (lfg_arch_is_hybrid(arch)) {
 
                     // The main difference between hybrid architectures is the
                     // layer filters, so pick the LIQUID one here
@@ -1689,12 +1689,12 @@ lfg_memory_i * lfg_model::create_memory(const lfg_memory_params & mem_params, co
     return res;
 }
 
-ggml_cgraph * lfg_model::build_graph(const llm_graph_params & graph_params) const {
-    std::unique_ptr<llm_graph_context> llm;
+ggml_cgraph * lfg_model::build_graph(const lfg_graph_params & graph_params) const {
+    std::unique_ptr<lfg_graph_context> llm;
 
     switch (arch) {
-        case LLM_ARCH_LFM2:
-        case LLM_ARCH_LFM2MOE:
+        case LFG_ARCH_LFM2:
+        case LFG_ARCH_LFM2MOE:
             {
                 if (hparams.swa_type == LFG_SWA_TYPE_STANDARD) {
                     llm = std::make_unique<lfg_build_lfm2<true>>(*this, graph_params);
@@ -1886,10 +1886,10 @@ lfg_rope_type lfg_model_rope_type(const lfg_model * model) {
     }
     switch (model->arch) {
         // LFM2 uses NEOX-style RoPE
-        case LLM_ARCH_LFM2:
-        case LLM_ARCH_LFM2MOE:
+        case LFG_ARCH_LFM2:
+        case LFG_ARCH_LFM2MOE:
              return LFG_ROPE_TYPE_NEOX;
-        case LLM_ARCH_UNKNOWN:
+        case LFG_ARCH_UNKNOWN:
             lfg_set_last_error(LFG_ERROR_UNSUPPORTED, "%s: unknown architecture", __func__);
             return LFG_ROPE_TYPE_NONE;
     }
@@ -2021,8 +2021,8 @@ const char * lfg_model_chat_template(const lfg_model * model, const char * name)
         lfg_set_last_error(LFG_ERROR_INVALID_ARGUMENT, "%s: model is NULL", __func__);
         return nullptr;
     }
-    const auto key = name ? LLM_KV(model->arch, name)(LLM_KV_TOKENIZER_CHAT_TEMPLATE)
-        : LLM_KV(model->arch)(LLM_KV_TOKENIZER_CHAT_TEMPLATE);
+    const auto key = name ? LFG_KV(model->arch, name)(LFG_KV_TOKENIZER_CHAT_TEMPLATE)
+        : LFG_KV(model->arch)(LFG_KV_TOKENIZER_CHAT_TEMPLATE);
     const auto & it = model->gguf_kv.find(key);
     if (it == model->gguf_kv.end()) {
         // one-off fix for very popular models (so we are not flooded with issues)
@@ -2080,7 +2080,7 @@ bool lfg_model_is_recurrent(const lfg_model * model) {
         lfg_set_last_error(LFG_ERROR_INVALID_ARGUMENT, "%s: model is NULL", __func__);
         return false;
     }
-    return llm_arch_is_recurrent(model->arch);
+    return lfg_arch_is_recurrent(model->arch);
 }
 
 bool lfg_model_is_hybrid(const lfg_model * model) {
@@ -2088,7 +2088,7 @@ bool lfg_model_is_hybrid(const lfg_model * model) {
         lfg_set_last_error(LFG_ERROR_INVALID_ARGUMENT, "%s: model is NULL", __func__);
         return false;
     }
-    return llm_arch_is_hybrid(model->arch);
+    return lfg_arch_is_hybrid(model->arch);
 }
 
 bool lfg_model_is_diffusion(const lfg_model * model) {
@@ -2096,7 +2096,7 @@ bool lfg_model_is_diffusion(const lfg_model * model) {
         lfg_set_last_error(LFG_ERROR_INVALID_ARGUMENT, "%s: model is NULL", __func__);
         return false;
     }
-    return llm_arch_is_diffusion(model->arch);
+    return lfg_arch_is_diffusion(model->arch);
 }
 
 const std::vector<std::pair<std::string, ggml_tensor *>> & lfg_internal_get_tensor_map(const lfg_model * model) {

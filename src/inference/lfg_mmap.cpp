@@ -66,7 +66,7 @@ struct lfg_file::impl {
         DWORD bufLen = FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
                                     NULL, error_code, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPSTR)&lpMsgBuf, 0, NULL);
         if (!bufLen) {
-            ret = format("Win32 error code: %lx", error_code);
+            ret = lfg_format("Win32 error code: %lx", error_code);
         } else {
             ret = lpMsgBuf;
             LocalFree(lpMsgBuf);
@@ -78,7 +78,7 @@ struct lfg_file::impl {
     impl(const char * fname, const char * mode, [[maybe_unused]] const bool use_direct_io = false) {
         fp = ggml_fopen(fname, mode);
         if (fp == NULL) {
-            throw std::runtime_error(format("failed to open %s: %s", fname, strerror(errno)));
+            throw std::runtime_error(lfg_format("failed to open %s: %s", fname, strerror(errno)));
         }
         fp_win32 = (HANDLE) _get_osfhandle(_fileno(fp));
         seek(0, SEEK_END);
@@ -91,7 +91,7 @@ struct lfg_file::impl {
         li.QuadPart = 0;
         BOOL ret = SetFilePointerEx(fp_win32, li, &li, FILE_CURRENT);
         if (!ret) {
-            throw std::runtime_error(format("read error: %s", GetErrorMessageWin32(GetLastError()).c_str()));
+            throw std::runtime_error(lfg_format("read error: %s", GetErrorMessageWin32(GetLastError()).c_str()));
         }
 
         return li.QuadPart;
@@ -106,7 +106,7 @@ struct lfg_file::impl {
         li.QuadPart = offset;
         BOOL ret = SetFilePointerEx(fp_win32, li, NULL, whence);
         if (!ret) {
-            throw std::runtime_error(format("read error: %s", GetErrorMessageWin32(GetLastError()).c_str()));
+            throw std::runtime_error(lfg_format("read error: %s", GetErrorMessageWin32(GetLastError()).c_str()));
         }
     }
 
@@ -117,7 +117,7 @@ struct lfg_file::impl {
             DWORD chunk_read = 0;
             BOOL result = ReadFile(fp_win32, reinterpret_cast<char*>(ptr) + bytes_read, chunk_size, &chunk_read, NULL);
             if (!result) {
-                throw std::runtime_error(format("read error: %s", GetErrorMessageWin32(GetLastError()).c_str()));
+                throw std::runtime_error(lfg_format("read error: %s", GetErrorMessageWin32(GetLastError()).c_str()));
             }
             if (chunk_read < chunk_size || chunk_read == 0) {
                 throw std::runtime_error("unexpectedly reached end of file");
@@ -140,7 +140,7 @@ struct lfg_file::impl {
             DWORD chunk_written = 0;
             BOOL result = WriteFile(fp_win32, reinterpret_cast<char const*>(ptr) + bytes_written, chunk_size, &chunk_written, NULL);
             if (!result) {
-                throw std::runtime_error(format("write error: %s", GetErrorMessageWin32(GetLastError()).c_str()));
+                throw std::runtime_error(lfg_format("write error: %s", GetErrorMessageWin32(GetLastError()).c_str()));
             }
             if (chunk_written < chunk_size || chunk_written == 0) {
                 throw std::runtime_error("unexpectedly failed to write bytes");
@@ -191,7 +191,7 @@ struct lfg_file::impl {
 
             off_t ret = lseek(fd, 0, SEEK_SET);
             if (ret == -1) {
-                throw std::runtime_error(format("seek error: %s", strerror(errno)));
+                throw std::runtime_error(lfg_format("seek error: %s", strerror(errno)));
             }
             return true;
         }
@@ -202,7 +202,7 @@ struct lfg_file::impl {
     void init_fp(const char * mode) {
         fp = ggml_fopen(fname.c_str(), mode);
         if (fp == NULL) {
-            throw std::runtime_error(format("failed to open %s: %s", fname.c_str(), strerror(errno)));
+            throw std::runtime_error(lfg_format("failed to open %s: %s", fname.c_str(), strerror(errno)));
         }
         seek(0, SEEK_END);
         size = tell();
@@ -213,7 +213,7 @@ struct lfg_file::impl {
         if (fd == -1) {
             long ret = std::ftell(fp);
             if (ret == -1) {
-                throw std::runtime_error(format("ftell error: %s", strerror(errno)));
+                throw std::runtime_error(lfg_format("ftell error: %s", strerror(errno)));
             }
 
             return (size_t) ret;
@@ -221,7 +221,7 @@ struct lfg_file::impl {
 
         off_t pos = lseek(fd, 0, SEEK_CUR);
         if (pos == -1) {
-            throw std::runtime_error(format("lseek error: %s", strerror(errno)));
+            throw std::runtime_error(lfg_format("lseek error: %s", strerror(errno)));
         }
         return (size_t) pos;
     }
@@ -234,7 +234,7 @@ struct lfg_file::impl {
             ret = lseek(fd, offset, whence);
         }
         if (ret == -1) {
-            throw std::runtime_error(format("seek error: %s", strerror(errno)));
+            throw std::runtime_error(lfg_format("seek error: %s", strerror(errno)));
         }
     }
 
@@ -249,7 +249,7 @@ struct lfg_file::impl {
 
             std::size_t ret = std::fread(ptr, to_read, 1, fp);
             if (ferror(fp)) {
-                throw std::runtime_error(format("read error: %s", strerror(errno)));
+                throw std::runtime_error(lfg_format("read error: %s", strerror(errno)));
             }
             if (to_read > 0 && ret != 1) {
                 throw std::runtime_error("unexpectedly reached end of file");
@@ -276,7 +276,7 @@ struct lfg_file::impl {
                         read_raw_unsafe(ptr, len);
                         return;
                     }
-                    throw std::runtime_error(format("read error: %s", strerror(errno)));
+                    throw std::runtime_error(lfg_format("read error: %s", strerror(errno)));
                 }
                 if (ret == 0) {
                     // EOF: allow if this read was only pulling alignment padding past file end
@@ -302,7 +302,7 @@ struct lfg_file::impl {
         void * raw_buffer = nullptr;
         int ret = posix_memalign(&raw_buffer, alignment, bytes_to_read);
         if (ret != 0) {
-            throw std::runtime_error(format("posix_memalign failed with error %d", ret));
+            throw std::runtime_error(lfg_format("posix_memalign failed with error %d", ret));
         }
 
         struct aligned_buffer_deleter {
@@ -338,7 +338,7 @@ struct lfg_file::impl {
         errno = 0;
         size_t ret = std::fwrite(ptr, len, 1, fp);
         if (ret != 1) {
-            throw std::runtime_error(format("write error: %s", strerror(errno)));
+            throw std::runtime_error(lfg_format("write error: %s", strerror(errno)));
         }
     }
 
@@ -429,7 +429,7 @@ struct lfg_mmap::impl {
 #endif
         addr = mmap(NULL, file->size(), PROT_READ, flags, fd, 0);
         if (addr == MAP_FAILED) {
-            throw std::runtime_error(format("mmap failed: %s", strerror(errno)));
+            throw std::runtime_error(lfg_format("mmap failed: %s", strerror(errno)));
         }
 
         if (prefetch > 0) {
@@ -515,7 +515,7 @@ struct lfg_mmap::impl {
 
         if (hMapping == NULL) {
             DWORD error = GetLastError();
-            throw std::runtime_error(format("CreateFileMappingA failed: %s", lfg_format_win_err(error).c_str()));
+            throw std::runtime_error(lfg_format("CreateFileMappingA failed: %s", lfg_format_win_err(error).c_str()));
         }
 
         addr = MapViewOfFile(hMapping, FILE_MAP_READ, 0, 0, 0);
@@ -523,7 +523,7 @@ struct lfg_mmap::impl {
         CloseHandle(hMapping);
 
         if (addr == NULL) {
-            throw std::runtime_error(format("MapViewOfFile failed: %s", lfg_format_win_err(error).c_str()));
+            throw std::runtime_error(lfg_format("MapViewOfFile failed: %s", lfg_format_win_err(error).c_str()));
         }
 
         if (prefetch > 0) {

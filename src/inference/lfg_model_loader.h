@@ -37,12 +37,12 @@ struct lfg_model_loader {
         lfg_tensor_weight(const lfg_file * file, uint16_t idx, const struct gguf_context * gguf_ctx, ggml_tensor * tensor) : idx(idx), tensor(tensor) {
             const int tensor_idx = gguf_find_tensor(gguf_ctx,  ggml_get_name(tensor));
             if (tensor_idx < 0) {
-                throw std::runtime_error(format("tensor '%s' not found in the model", ggml_get_name(tensor)));
+                throw std::runtime_error(lfg_format("tensor '%s' not found in the model", ggml_get_name(tensor)));
             }
 
             offs = gguf_get_data_offset(gguf_ctx) + gguf_get_tensor_offset(gguf_ctx, tensor_idx);
             if (offs + ggml_nbytes(tensor) < offs || offs + ggml_nbytes(tensor) > file->size()) {
-                throw std::runtime_error(format("tensor '%s' data is not within the file bounds, model is corrupted or incomplete", ggml_get_name(tensor)));
+                throw std::runtime_error(lfg_format("tensor '%s' data is not within the file bounds, model is corrupted or incomplete", ggml_get_name(tensor)));
             }
         }
     };
@@ -94,7 +94,7 @@ struct lfg_model_loader {
     std::vector<ggml_context_ptr> contexts;
 
     std::string arch_name;
-    LLM_KV      llm_kv    = LLM_KV(LLM_ARCH_UNKNOWN);
+    LFG_KV      lfg_kv_enum    = LFG_KV(LFG_ARCH_UNKNOWN);
 
     size_t size_done = 0;
     size_t size_data = 0;
@@ -119,7 +119,7 @@ struct lfg_model_loader {
 
     template<typename T>
     typename std::enable_if<std::is_integral<T>::value, bool>::type
-    get_arr_n(enum llm_kv kid, T & result, bool required = true);
+    get_arr_n(enum lfg_kv_enum kid, T & result, bool required = true);
 
     template<typename T>
     bool get_arr(const std::string & key, std::vector<T> & result, bool required = true);
@@ -128,25 +128,25 @@ struct lfg_model_loader {
     bool get_arr(const std::string & key, std::array<T, N_MAX> & result, bool required = true);
 
     template<typename T>
-    bool get_arr(enum llm_kv kid, T & result, bool required = true);
+    bool get_arr(enum lfg_kv_enum kid, T & result, bool required = true);
 
     template<typename T>
     bool get_key(const std::string & key, T & result, bool required = true);
 
     template<typename T>
-    bool get_key(enum llm_kv kid, T & result, bool required = true);
+    bool get_key(enum lfg_kv_enum kid, T & result, bool required = true);
 
     template<typename T, size_t N_MAX>
     bool get_key_or_arr(const std::string & key, std::array<T, N_MAX> & result, uint32_t n, bool required = true);
 
     template<typename T>
-    bool get_key_or_arr(enum llm_kv kid, T & result, uint32_t n, bool required = true);
+    bool get_key_or_arr(enum lfg_kv_enum kid, T & result, uint32_t n, bool required = true);
 
-    bool get_key_or_arr(enum llm_kv kid, uint32_t & result, bool required = true);
+    bool get_key_or_arr(enum lfg_kv_enum kid, uint32_t & result, bool required = true);
 
     std::string get_arch_name() const;
 
-    enum llm_arch get_arch() const;
+    enum lfg_arch_enum get_arch() const;
 
     const lfg_tensor_weight * get_weight(const char * name) const;
 

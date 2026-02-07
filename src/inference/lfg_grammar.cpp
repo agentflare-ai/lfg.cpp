@@ -1288,6 +1288,24 @@ void lfg_grammar_apply_impl(const struct lfg_grammar & grammar, lfg_token_data_a
     for (const auto & reject : rejects) {
         cur_p->data[reject.index].logit = -INFINITY;
     }
+
+    // When grammar accepts EOS (empty stack exists), boost EOS logit above all
+    // other candidates so the model stops immediately after valid output.
+    if (allow_eog) {
+        float max_logit = -INFINITY;
+        for (size_t i = 0; i < cur_p->size; ++i) {
+            if (!grammar.vocab->is_eog(cur_p->data[i].id) && cur_p->data[i].logit > max_logit) {
+                max_logit = cur_p->data[i].logit;
+            }
+        }
+        float eos_logit = (max_logit > -INFINITY) ? max_logit + 1.0f : 0.0f;
+        for (size_t i = 0; i < cur_p->size; ++i) {
+            if (grammar.vocab->is_eog(cur_p->data[i].id)) {
+                cur_p->data[i].logit = eos_logit;
+            }
+        }
+        cur_p->sorted = false;
+    }
 }
 
 void lfg_grammar_accept_impl(struct lfg_grammar & grammar, lfg_token token) {

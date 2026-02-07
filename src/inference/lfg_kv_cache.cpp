@@ -1570,10 +1570,10 @@ ggml_tensor * lfg_kv_cache::build_rope_shift(
     return tmp;
 }
 
-class llm_graph_input_k_shift : public llm_graph_input_i {
+class lfg_graph_input_k_shift : public lfg_graph_input_i {
 public:
-    llm_graph_input_k_shift(const lfg_kv_cache * kv_self) : kv_self(kv_self) {}
-    virtual ~llm_graph_input_k_shift() = default;
+    lfg_graph_input_k_shift(const lfg_kv_cache * kv_self) : kv_self(kv_self) {}
+    virtual ~lfg_graph_input_k_shift() = default;
 
     void set_input(const lfg_ubatch * ubatch) override;
 
@@ -1582,7 +1582,7 @@ public:
     const lfg_kv_cache * kv_self;
 };
 
-void llm_graph_input_k_shift::set_input(const lfg_ubatch * ubatch) {
+void lfg_graph_input_k_shift::set_input(const lfg_ubatch * ubatch) {
     GGML_UNUSED(ubatch);
 
     if (k_shift) {
@@ -1590,14 +1590,14 @@ void llm_graph_input_k_shift::set_input(const lfg_ubatch * ubatch) {
     }
 }
 
-ggml_cgraph * lfg_kv_cache::build_graph_shift(llm_graph_result * res, lfg_context * lctx) const {
+ggml_cgraph * lfg_kv_cache::build_graph_shift(lfg_graph_result * res, lfg_context * lctx) const {
     auto * ctx = res->get_ctx();
     auto * gf  = res->get_gf();
 
     const auto & n_embd_head_k = hparams.n_embd_head_k;
   //const auto & n_embd_head_v = hparams.n_embd_head_v;
 
-    auto inp = std::make_unique<llm_graph_input_k_shift>(this);
+    auto inp = std::make_unique<lfg_graph_input_k_shift>(this);
 
     inp->k_shift = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, (int64_t) get_size()*n_stream);
     ggml_set_input(inp->k_shift);

@@ -108,6 +108,16 @@ struct lfg_session {
     int          healing_n_past;
     lfg_sampler *healing_sampler_snapshot;  // owned, NULL if none
 
+    // Generation counting (for max_tokens)
+    int32_t generated_count;
+
+    // Stop sequences (flat storage)
+    lfg_token *stop_flat;          // all sequences concatenated
+    size_t    *stop_offsets;       // start offset of each sequence
+    size_t    *stop_lengths;       // length of each sequence
+    size_t     stop_count;         // number of sequences
+    size_t     stop_max_len;       // max sequence length (for lookback)
+
     // Reasoning state tracking (mirrors old InferenceCore fields)
     bool   in_reasoning;
     size_t reasoning_token_count;
@@ -127,6 +137,7 @@ struct lfg_checkpoint {
     size_t   token_count;
     size_t   sampler_count;
     uint64_t rng_state;
+    int32_t  generated_count;
     size_t   reasoning_token_count;
     uint8_t *state_data;      size_t state_data_size;
     char    *grammar_str;
@@ -255,7 +266,8 @@ static void session_rebuild_sampler(lfg_session *s) {
         if (grammar_sampler) {
             lfg_sampler_chain_add(s->sampler, grammar_sampler);
         } else {
-            spdlog::error("Failed to initialize grammar sampler.");
+            lfg_set_last_error(LFG_ERROR_INTERNAL,
+                "session_rebuild_sampler: failed to initialize grammar sampler");
         }
     }
 
@@ -438,6 +450,7 @@ LFG_API lfg_session_config lfg_session_default_config(void) {
     cfg.enable_healing = false;
     cfg.structured_checkpointing = true;
     cfg.reasoning_budget = 0;
+    cfg.max_tokens = 0;
     cfg.sampling = lfg_sampling_default_config();
     return cfg;
 }
@@ -521,6 +534,9 @@ LFG_API void lfg_session_free(lfg_session * session) {
     free(session->reasoning_end_tokens);
     free(session->grammar_str);
     free(session->grammar_root);
+    free(session->stop_flat);
+    free(session->stop_offsets);
+    free(session->stop_lengths);
     free(session->pos_buf);
     free(session->logits_buf);
 
@@ -540,6 +556,7 @@ LFG_API void lfg_session_reset(lfg_session * session) {
     session->sampler_history.size = 0;
     session->sampler_offsets.size = 0;
     session->pending_sampler_accepts = 0;
+    session->generated_count = 0;
     session->in_reasoning = false;
     session->reasoning_token_count = 0;
     session->forcing_reasoning_end_index = -1;
@@ -559,6 +576,9 @@ LFG_API bool lfg_session_configure_structured(lfg_session * session,
                                                     const char * grammar_or_schema,
                                                     const char * root_rule) {
     if (!session || !grammar_or_schema) return false;
+
+    // Clear any stale error from previous API calls so the post-rebuild check is accurate.
+    lfg_clear_last_error();
 
     // Free old grammar strings
     free(session->grammar_str);
@@ -584,6 +604,13 @@ LFG_API bool lfg_session_configure_structured(lfg_session * session,
     if (session->healing_sampler_snapshot) {
         lfg_sampler_free(session->healing_sampler_snapshot);
         session->healing_sampler_snapshot = nullptr;
+    }
+
+    // Verify grammar sampler was successfully created
+    if (session->grammar_str && session->grammar_str[0] != '\0') {
+        if (lfg_get_last_error(nullptr, 0) != LFG_ERROR_NONE) {
+            return false;
+        }
     }
     return true;
 }
@@ -613,6 +640,56 @@ LFG_API void lfg_session_configure_reasoning(lfg_session * session,
     }
 
     session_rebuild_sampler(session);
+}
+
+LFG_API bool lfg_session_configure_stop_sequences(
+        lfg_session * session,
+        const lfg_token * const * sequences,
+        const size_t * sequence_lengths,
+        size_t n_sequences) {
+    if (!session) return false;
+
+    // Free old storage
+    free(session->stop_flat);
+    free(session->stop_offsets);
+    free(session->stop_lengths);
+    session->stop_flat = nullptr;
+    session->stop_offsets = nullptr;
+    session->stop_lengths = nullptr;
+    session->stop_count = 0;
+    session->stop_max_len = 0;
+
+    if (n_sequences == 0 || !sequences || !sequence_lengths) return true;
+
+    // Compute total flat size and max length
+    size_t total = 0;
+    size_t max_len = 0;
+    for (size_t i = 0; i < n_sequences; ++i) {
+        if (sequence_lengths[i] == 0 || !sequences[i]) continue;
+        total += sequence_lengths[i];
+        if (sequence_lengths[i] > max_len) max_len = sequence_lengths[i];
+    }
+
+    if (total == 0) return true;
+
+    session->stop_flat    = (lfg_token *)malloc(total * sizeof(lfg_token));
+    session->stop_offsets = (size_t *)malloc(n_sequences * sizeof(size_t));
+    session->stop_lengths = (size_t *)malloc(n_sequences * sizeof(size_t));
+
+    size_t offset = 0;
+    size_t count = 0;
+    for (size_t i = 0; i < n_sequences; ++i) {
+        if (sequence_lengths[i] == 0 || !sequences[i]) continue;
+        session->stop_offsets[count] = offset;
+        session->stop_lengths[count] = sequence_lengths[i];
+        memcpy(session->stop_flat + offset, sequences[i], sequence_lengths[i] * sizeof(lfg_token));
+        offset += sequence_lengths[i];
+        count++;
+    }
+    session->stop_count = count;
+    session->stop_max_len = max_len;
+
+    return true;
 }
 
 LFG_API int32_t lfg_json_schema_to_grammar(const char * json_schema,
@@ -709,6 +786,8 @@ LFG_API lfg_token lfg_session_sample(lfg_session * session) {
         }
     }
 
+    // Forced reasoning end tokens always complete before max_tokens takes effect.
+    // This prevents corrupted grammar state from a mid-sequence truncation.
     if (session->forcing_reasoning_end_index >= 0) {
         if (session->forcing_reasoning_end_index < (int)session->reasoning_end_count) {
             lfg_token forced = session->reasoning_end_tokens[session->forcing_reasoning_end_index];
@@ -719,8 +798,41 @@ LFG_API lfg_token lfg_session_sample(lfg_session * session) {
         }
     }
 
+    // Max tokens enforcement (after forced reasoning end to avoid mid-sequence truncation)
+    if (session->config.max_tokens > 0 && session->generated_count >= session->config.max_tokens) {
+        return lfg_vocab_eos(lfg_model_get_vocab(session->model));
+    }
+
     lfg_token token = lfg_sampler_sample(session->sampler, session->ctx, -1);
     session_record_sampler_token(session, token, true);
+    session->generated_count++;
+
+    // Stop sequence matching: check if tail of token_history + new token matches
+    if (session->stop_count > 0) {
+        // The new token is already in sampler_history but not token_history yet.
+        // We check against token_history (which contains prior tokens) + the new token.
+        for (size_t s = 0; s < session->stop_count; ++s) {
+            size_t slen = session->stop_lengths[s];
+            const lfg_token *seq = session->stop_flat + session->stop_offsets[s];
+
+            // Check if the last token matches the last element of this stop sequence
+            if (seq[slen - 1] != token) continue;
+
+            if (slen == 1) {
+                return lfg_vocab_eos(lfg_model_get_vocab(session->model));
+            }
+
+            // Check preceding tokens in history
+            size_t hist_len = session->token_history.size;
+            if (hist_len < slen - 1) continue;
+
+            const lfg_token *tail = session->token_history.data + hist_len - (slen - 1);
+            if (std::memcmp(tail, seq, (slen - 1) * sizeof(lfg_token)) == 0) {
+                return lfg_vocab_eos(lfg_model_get_vocab(session->model));
+            }
+        }
+    }
+
     return token;
 }
 
@@ -729,6 +841,23 @@ LFG_API bool lfg_session_heal_last_token(lfg_session * session) {
     if (session->token_history.size < 2) return false;
 
     lfg_token t_last = session->token_history.data[session->token_history.size - 1];
+
+    // Skip healing for reasoning boundary tokens — they are structural markers
+    // whose bytes conflict with the grammar constraint (e.g. "</think>" vs JSON).
+    // The sampler may have already transitioned (reasoning gate → ACTIVE) before
+    // the snapshot was taken, so restoring and re-sampling with a prefix constraint
+    // would conflict with the now-active grammar.
+    if (session->reasoning_start_count > 0) {
+        for (size_t i = 0; i < session->reasoning_start_count; i++) {
+            if (t_last == session->reasoning_start_tokens[i]) return false;
+        }
+    }
+    if (session->reasoning_end_count > 0) {
+        for (size_t i = 0; i < session->reasoning_end_count; i++) {
+            if (t_last == session->reasoning_end_tokens[i]) return false;
+        }
+    }
+
     int target_n_past = session->n_past - 1;
 
     if (session->config.enable_healing &&
@@ -869,6 +998,8 @@ LFG_API lfg_checkpoint * lfg_session_create_checkpoint(lfg_session * session) {
     ck->n_past = session->n_past;
     ck->token_count = session->token_history.size;
     ck->sampler_count = session->sampler_history.size;
+    ck->generated_count = session->generated_count;
+    ck->reasoning_token_count = session->reasoning_token_count;
     ck->grammar_str = session->grammar_str ? strdup(session->grammar_str) : nullptr;
     ck->grammar_root = session->grammar_root ? strdup(session->grammar_root) : nullptr;
 
@@ -932,6 +1063,8 @@ LFG_API bool lfg_session_restore_checkpoint_ex(lfg_session * session,
     session->sampler_history.size = checkpoint->sampler_count;
     session->pending_sampler_accepts = 0;
     session->n_past = checkpoint->n_past;
+    session->generated_count = checkpoint->generated_count;
+    session->reasoning_token_count = checkpoint->reasoning_token_count;
 
     // Reset and Re-prime Sampler
     if (session->sampler) {

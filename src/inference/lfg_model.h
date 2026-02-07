@@ -19,116 +19,116 @@ struct lfg_ubatch;
 struct lfg_model_loader;
 
 // available models
-enum llm_type {
-    LLM_TYPE_UNKNOWN,
-    LLM_TYPE_14M,
-    LLM_TYPE_17M,
-    LLM_TYPE_22M,
-    LLM_TYPE_33M,
-    LLM_TYPE_47M,
-    LLM_TYPE_60M,
-    LLM_TYPE_70M,
-    LLM_TYPE_80M,
-    LLM_TYPE_109M,
-    LLM_TYPE_137M,
-    LLM_TYPE_140M,
-    LLM_TYPE_149M,
-    LLM_TYPE_160M,
-    LLM_TYPE_190M,
-    LLM_TYPE_220M,
-    LLM_TYPE_250M,
-    LLM_TYPE_256M,
-    LLM_TYPE_270M,
-    LLM_TYPE_335M,
-    LLM_TYPE_350M,
-    LLM_TYPE_360M,
-    LLM_TYPE_395M,
-    LLM_TYPE_410M,
-    LLM_TYPE_450M,
-    LLM_TYPE_475M,
-    LLM_TYPE_558M,
-    LLM_TYPE_700M,
-    LLM_TYPE_770M,
-    LLM_TYPE_780M,
-    LLM_TYPE_950M,
-    LLM_TYPE_0_3B,
-    LLM_TYPE_0_5B,
-    LLM_TYPE_0_6B,
-    LLM_TYPE_1B,
-    LLM_TYPE_1_2B,
-    LLM_TYPE_1_3B,
-    LLM_TYPE_1_4B,
-    LLM_TYPE_1_5B,
-    LLM_TYPE_1_6B,
-    LLM_TYPE_1_7B,
-    LLM_TYPE_1_8B,
-    LLM_TYPE_2B,
-    LLM_TYPE_2_6B,
-    LLM_TYPE_2_8B,
-    LLM_TYPE_2_9B,
-    LLM_TYPE_3B,
-    LLM_TYPE_4B,
-    LLM_TYPE_6B,
-    LLM_TYPE_6_9B,
-    LLM_TYPE_7B,
-    LLM_TYPE_8B,
-    LLM_TYPE_9B,
-    LLM_TYPE_11B,
-    LLM_TYPE_12B,
-    LLM_TYPE_13B,
-    LLM_TYPE_14B,
-    LLM_TYPE_15B,
-    LLM_TYPE_16B,
-    LLM_TYPE_20B,
-    LLM_TYPE_26B,
-    LLM_TYPE_27B,
-    LLM_TYPE_30B,
-    LLM_TYPE_32B,
-    LLM_TYPE_34B,
-    LLM_TYPE_35B,
-    LLM_TYPE_36B,
-    LLM_TYPE_40B,
-    LLM_TYPE_65B,
-    LLM_TYPE_70B,
-    LLM_TYPE_120B,
-    LLM_TYPE_142B,
-    LLM_TYPE_236B,
-    LLM_TYPE_290B,
-    LLM_TYPE_314B,
-    LLM_TYPE_405B,
-    LLM_TYPE_671B,
-    LLM_TYPE_SMALL,
-    LLM_TYPE_MEDIUM,
-    LLM_TYPE_LARGE,
-    LLM_TYPE_XL,
-    LLM_TYPE_A1_7B,
-    LLM_TYPE_A2_7B,
-    LLM_TYPE_8x7B,
-    LLM_TYPE_8x22B,
-    LLM_TYPE_16x12B,
-    LLM_TYPE_16x3_8B,
-    LLM_TYPE_10B_128x3_66B,
-    LLM_TYPE_57B_A14B,
-    LLM_TYPE_17B_16E, // liquid4 Scout
-    LLM_TYPE_17B_128E, // liquid4 Maverick
-    LLM_TYPE_A13B,
-    LLM_TYPE_7B_A1B,
-    LLM_TYPE_8B_A1B, // lfm2moe
-    LLM_TYPE_16B_A1B,
-    LLM_TYPE_21B_A3B, // Ernie MoE small
-    LLM_TYPE_30B_A3B,
-    LLM_TYPE_31B_A3_5B,
-    LLM_TYPE_80B_A3B, // Qwen3 Next
-    LLM_TYPE_100B_A6B,
-    LLM_TYPE_102B_A12B, // Solar-Open
-    LLM_TYPE_106B_A12B, // GLM-4.5-Air
-    LLM_TYPE_230B_A10B, // Minimax M2
-    LLM_TYPE_235B_A22B,
-    LLM_TYPE_300B_A47B, // Ernie MoE big
-    LLM_TYPE_310B_A15B, // /MiMo-V2-Flash
-    LLM_TYPE_355B_A32B, // GLM-4.5
-    LLM_TYPE_E2B,
-    LLM_TYPE_E4B,
+enum lfg_type_enum {
+    LFG_TYPE_UNKNOWN,
+    LFG_TYPE_14M,
+    LFG_TYPE_17M,
+    LFG_TYPE_22M,
+    LFG_TYPE_33M,
+    LFG_TYPE_47M,
+    LFG_TYPE_60M,
+    LFG_TYPE_70M,
+    LFG_TYPE_80M,
+    LFG_TYPE_109M,
+    LFG_TYPE_137M,
+    LFG_TYPE_140M,
+    LFG_TYPE_149M,
+    LFG_TYPE_160M,
+    LFG_TYPE_190M,
+    LFG_TYPE_220M,
+    LFG_TYPE_250M,
+    LFG_TYPE_256M,
+    LFG_TYPE_270M,
+    LFG_TYPE_335M,
+    LFG_TYPE_350M,
+    LFG_TYPE_360M,
+    LFG_TYPE_395M,
+    LFG_TYPE_410M,
+    LFG_TYPE_450M,
+    LFG_TYPE_475M,
+    LFG_TYPE_558M,
+    LFG_TYPE_700M,
+    LFG_TYPE_770M,
+    LFG_TYPE_780M,
+    LFG_TYPE_950M,
+    LFG_TYPE_0_3B,
+    LFG_TYPE_0_5B,
+    LFG_TYPE_0_6B,
+    LFG_TYPE_1B,
+    LFG_TYPE_1_2B,
+    LFG_TYPE_1_3B,
+    LFG_TYPE_1_4B,
+    LFG_TYPE_1_5B,
+    LFG_TYPE_1_6B,
+    LFG_TYPE_1_7B,
+    LFG_TYPE_1_8B,
+    LFG_TYPE_2B,
+    LFG_TYPE_2_6B,
+    LFG_TYPE_2_8B,
+    LFG_TYPE_2_9B,
+    LFG_TYPE_3B,
+    LFG_TYPE_4B,
+    LFG_TYPE_6B,
+    LFG_TYPE_6_9B,
+    LFG_TYPE_7B,
+    LFG_TYPE_8B,
+    LFG_TYPE_9B,
+    LFG_TYPE_11B,
+    LFG_TYPE_12B,
+    LFG_TYPE_13B,
+    LFG_TYPE_14B,
+    LFG_TYPE_15B,
+    LFG_TYPE_16B,
+    LFG_TYPE_20B,
+    LFG_TYPE_26B,
+    LFG_TYPE_27B,
+    LFG_TYPE_30B,
+    LFG_TYPE_32B,
+    LFG_TYPE_34B,
+    LFG_TYPE_35B,
+    LFG_TYPE_36B,
+    LFG_TYPE_40B,
+    LFG_TYPE_65B,
+    LFG_TYPE_70B,
+    LFG_TYPE_120B,
+    LFG_TYPE_142B,
+    LFG_TYPE_236B,
+    LFG_TYPE_290B,
+    LFG_TYPE_314B,
+    LFG_TYPE_405B,
+    LFG_TYPE_671B,
+    LFG_TYPE_SMALL,
+    LFG_TYPE_MEDIUM,
+    LFG_TYPE_LARGE,
+    LFG_TYPE_XL,
+    LFG_TYPE_A1_7B,
+    LFG_TYPE_A2_7B,
+    LFG_TYPE_8x7B,
+    LFG_TYPE_8x22B,
+    LFG_TYPE_16x12B,
+    LFG_TYPE_16x3_8B,
+    LFG_TYPE_10B_128x3_66B,
+    LFG_TYPE_57B_A14B,
+    LFG_TYPE_17B_16E, // liquid4 Scout
+    LFG_TYPE_17B_128E, // liquid4 Maverick
+    LFG_TYPE_A13B,
+    LFG_TYPE_7B_A1B,
+    LFG_TYPE_8B_A1B, // lfm2moe
+    LFG_TYPE_16B_A1B,
+    LFG_TYPE_21B_A3B, // Ernie MoE small
+    LFG_TYPE_30B_A3B,
+    LFG_TYPE_31B_A3_5B,
+    LFG_TYPE_80B_A3B, // Qwen3 Next
+    LFG_TYPE_100B_A6B,
+    LFG_TYPE_102B_A12B, // Solar-Open
+    LFG_TYPE_106B_A12B, // GLM-4.5-Air
+    LFG_TYPE_230B_A10B, // Minimax M2
+    LFG_TYPE_235B_A22B,
+    LFG_TYPE_300B_A47B, // Ernie MoE big
+    LFG_TYPE_310B_A15B, // /MiMo-V2-Flash
+    LFG_TYPE_355B_A32B, // GLM-4.5
+    LFG_TYPE_E2B,
+    LFG_TYPE_E4B,
 };
 
 std::string lfg_rope_scaling_type_name(lfg_rope_scaling_type rope_scaling_type);
@@ -421,8 +421,8 @@ struct lfg_layer {
 };
 
 struct lfg_model {
-    llm_type type = LLM_TYPE_UNKNOWN;
-    llm_arch arch = LLM_ARCH_UNKNOWN;
+    lfg_type_enum type = LFG_TYPE_UNKNOWN;
+    lfg_arch_enum arch = LFG_ARCH_UNKNOWN;
 
     std::string name = "n/a";
 
@@ -526,11 +526,11 @@ struct lfg_model {
 
     ggml_tensor * get_rope_factors(const lfg_cparams & cparams, uint32_t il) const;
 
-    // TODO: move this to new llm_arch_model_i interface
+    // TODO: move this to new lfg_arch_enum_model_i interface
     lfg_memory_i * create_memory(const lfg_memory_params & params, const lfg_cparams & cparams) const;
 
-    // TODO: move this to new llm_arch_model_i interface
-    ggml_cgraph * build_graph(const llm_graph_params & params) const;
+    // TODO: move this to new lfg_arch_enum_model_i interface
+    ggml_cgraph * build_graph(const lfg_graph_params & params) const;
 
 private:
     lfg_model_params params;
@@ -539,7 +539,7 @@ private:
     std::unique_ptr<impl> pimpl;
 };
 
-const char * llm_type_name(llm_type type);
+const char * lfg_type_name(lfg_type_enum type);
 
 // For internal test use
 // TODO: remove

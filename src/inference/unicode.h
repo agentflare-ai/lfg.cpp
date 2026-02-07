@@ -5,7 +5,7 @@
 #include <vector>
 
 // TODO: reimplement this structure in endian-independent way
-struct unicode_cpt_flags {
+struct lfg_unicode_cpt_flags {
     enum {
         UNDEFINED       = 0x0001,
         NUMBER          = 0x0002,  // regex: \p{N}
@@ -38,7 +38,7 @@ struct unicode_cpt_flags {
     uint16_t is_nfd         : 1;
 
     // decode from uint16
-    inline unicode_cpt_flags(const uint16_t flags = 0) {
+    inline lfg_unicode_cpt_flags(const uint16_t flags = 0) {
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
         *reinterpret_cast<uint16_t*>(this) = flags;
 #elif __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
@@ -89,23 +89,23 @@ struct unicode_cpt_flags {
     }
 };
 
-size_t unicode_len_utf8(char src);
+size_t lfg_unicode_len_utf8(char src);
 
-std::string unicode_cpt_to_utf8  (uint32_t cpt);
-uint32_t    unicode_cpt_from_utf8(const std::string & utf8, size_t & offset);
+std::string lfg_unicode_cpt_to_utf8  (uint32_t cpt);
+uint32_t    lfg_unicode_cpt_from_utf8(const std::string & utf8, size_t & offset);
 
-std::vector<uint32_t> unicode_cpts_from_utf8(const std::string & utf8);
+std::vector<uint32_t> lfg_unicode_cpts_from_utf8(const std::string & utf8);
 
-std::vector<uint32_t> unicode_cpts_normalize_nfd(const std::vector<uint32_t> & cpts);
+std::vector<uint32_t> lfg_unicode_cpts_normalize_nfd(const std::vector<uint32_t> & cpts);
 
-unicode_cpt_flags unicode_cpt_flags_from_cpt (uint32_t cpt);
-unicode_cpt_flags unicode_cpt_flags_from_utf8(const std::string & utf8);
+lfg_unicode_cpt_flags lfg_unicode_cpt_flags_from_cpt (uint32_t cpt);
+lfg_unicode_cpt_flags lfg_unicode_cpt_flags_from_utf8(const std::string & utf8);
 
-std::string unicode_byte_to_utf8(uint8_t byte);
-uint8_t     unicode_utf8_to_byte(const std::string & utf8);
+std::string lfg_unicode_byte_to_utf8(uint8_t byte);
+uint8_t     lfg_unicode_utf8_to_byte(const std::string & utf8);
 
-uint32_t unicode_tolower(uint32_t cpt);
+uint32_t lfg_unicode_tolower(uint32_t cpt);
 
-bool unicode_cpt_is_han(uint32_t cpt);
+bool lfg_unicode_cpt_is_han(uint32_t cpt);
 
-std::vector<std::string> unicode_regex_split(const std::string & text, const std::vector<std::string> & regex_exprs);
+std::vector<std::string> lfg_unicode_regex_split(const std::string & text, const std::vector<std::string> & regex_exprs);

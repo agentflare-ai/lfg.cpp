@@ -56,7 +56,7 @@ enum lfg_vocab_pre_type {
     LFG_VOCAB_PRE_TYPE_EXAONE_MOE      = 45,
 };
 
-struct LLM_KV;
+struct LFG_KV;
 struct lfg_model_loader;
 
 struct lfg_vocab {
@@ -69,7 +69,7 @@ struct lfg_vocab {
     lfg_vocab();
     ~lfg_vocab();
 
-    void load(lfg_model_loader & ml, const LLM_KV & kv);
+    void load(lfg_model_loader & ml, const LFG_KV & kv);
 
     std::string get_tokenizer_model() const;
     std::string get_tokenizer_pre() const;

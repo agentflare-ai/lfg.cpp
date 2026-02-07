@@ -218,7 +218,7 @@ lfg_context::lfg_context(
         for (auto * dev : model.devices) {
             ggml_backend_t backend = ggml_backend_dev_init(dev, nullptr);
             if (backend == nullptr) {
-                throw std::runtime_error(format("failed to initialize %s backend", ggml_backend_dev_name(dev)));
+                throw std::runtime_error(lfg_format("failed to initialize %s backend", ggml_backend_dev_name(dev)));
             }
             backends.emplace_back(backend);
         }
@@ -230,7 +230,7 @@ lfg_context::lfg_context(
                 LFG_LOG_WARN("%s: initializing ACCEL backend: %s\n", __func__, ggml_backend_dev_name(dev));
                 ggml_backend_t backend = ggml_backend_dev_init(dev, nullptr);
                 if (backend == nullptr) {
-                    throw std::runtime_error(format("failed to initialize %s backend", ggml_backend_dev_name(dev)));
+                    throw std::runtime_error(lfg_format("failed to initialize %s backend", ggml_backend_dev_name(dev)));
                 }
                 backends.emplace_back(backend);
             }
@@ -411,8 +411,8 @@ void lfg_context::sched_reserve() {
 
     LFG_LOG_DEBUG("%s: max_nodes = %zu\n", __func__, max_nodes);
 
-    gf_res_prev.reset(new llm_graph_result(max_nodes));
-    gf_res_reserve.reset(new llm_graph_result(max_nodes));
+    gf_res_prev.reset(new lfg_graph_result(max_nodes));
+    gf_res_reserve.reset(new lfg_graph_result(max_nodes));
 
     sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, cparams.pipeline_parallel, cparams.op_offload));
 
@@ -702,10 +702,10 @@ int64_t lfg_context::output_resolve_row(int32_t i) const {
     if (i < 0) {
         j = n_outputs + i;
         if (j < 0) {
-            throw std::runtime_error(format("negative index out of range [0, %d)", n_outputs));
+            throw std::runtime_error(lfg_format("negative index out of range [0, %d)", n_outputs));
         }
     } else if ((size_t) i >= output_ids.size()) {
-        throw std::runtime_error(format("out of range [0, %zu)", output_ids.size()));
+        throw std::runtime_error(lfg_format("out of range [0, %zu)", output_ids.size()));
     } else {
         // use output_ids to translate the batch token index into a row number
         // that holds this token's data.
@@ -714,11 +714,11 @@ int64_t lfg_context::output_resolve_row(int32_t i) const {
 
     if (j < 0) {
         // the batch token was not configured to output anything
-        throw std::runtime_error(format("batch.logits[%d] != true", i));
+        throw std::runtime_error(lfg_format("batch.logits[%d] != true", i));
     }
 
     if (j >= n_outputs) {
-        throw std::runtime_error(format("corrupt output buffer (j=%" PRId64 ", n_outputs=%d)", j, n_outputs));
+        throw std::runtime_error(lfg_format("corrupt output buffer (j=%" PRId64 ", n_outputs=%d)", j, n_outputs));
     }
 
     return j;
@@ -738,20 +738,20 @@ float * lfg_context::get_logits_ith(int32_t i) {
         if (i < 0) {
             j = n_outputs + i;
             if (j < 0) {
-                throw std::runtime_error(format("negative index out of range [0, %d)", n_outputs));
+                throw std::runtime_error(lfg_format("negative index out of range [0, %d)", n_outputs));
             }
         } else if ((size_t) i >= output_ids.size()) {
-            throw std::runtime_error(format("out of range [0, %zu)", output_ids.size()));
+            throw std::runtime_error(lfg_format("out of range [0, %zu)", output_ids.size()));
         } else {
             j = output_ids[i];
         }
 
         if (j < 0) {
-            throw std::runtime_error(format("batch.logits[%d] != true", i));
+            throw std::runtime_error(lfg_format("batch.logits[%d] != true", i));
         }
         if (j >= n_outputs) {
             // This should not happen
-            throw std::runtime_error(format("corrupt output buffer (j=%" PRId64 ", n_outputs=%d)", j, n_outputs));
+            throw std::runtime_error(lfg_format("corrupt output buffer (j=%" PRId64 ", n_outputs=%d)", j, n_outputs));
         }
 
         return logits + j*model.vocab.n_tokens();
@@ -786,20 +786,20 @@ float * lfg_context::get_embeddings_ith(int32_t i) {
         if (i < 0) {
             j = n_outputs + i;
             if (j < 0) {
-                throw std::runtime_error(format("negative index out of range [0, %d)", n_outputs));
+                throw std::runtime_error(lfg_format("negative index out of range [0, %d)", n_outputs));
             }
         } else if ((size_t) i >= output_ids.size()) {
-            throw std::runtime_error(format("out of range [0, %zu)", output_ids.size()));
+            throw std::runtime_error(lfg_format("out of range [0, %zu)", output_ids.size()));
         } else {
             j = output_ids[i];
         }
 
         if (j < 0) {
-            throw std::runtime_error(format("batch.logits[%d] != true", i));
+            throw std::runtime_error(lfg_format("batch.logits[%d] != true", i));
         }
         if (j >= n_outputs) {
             // This should not happen
-            throw std::runtime_error(format("corrupt output buffer (j=%" PRId64 ", n_outputs=%d)", j, n_outputs));
+            throw std::runtime_error(lfg_format("corrupt output buffer (j=%" PRId64 ", n_outputs=%d)", j, n_outputs));
         }
 
         const uint32_t n_embd_out = model.hparams.get_n_embd_out();
@@ -1130,7 +1130,7 @@ bool lfg_context::apply_adapter_cvec(
     return cvec.apply(model, data, len, n_embd, il_start, il_end);
 }
 
-llm_graph_result * lfg_context::process_ubatch(const lfg_ubatch & ubatch, llm_graph_type gtype, lfg_memory_context_i * mctx, ggml_status & ret) {
+lfg_graph_result * lfg_context::process_ubatch(const lfg_ubatch & ubatch, lfg_graph_type gtype, lfg_memory_context_i * mctx, ggml_status & ret) {
     if (mctx && !mctx->apply()) {
         LFG_LOG_ERROR("%s: failed to apply memory context\n", __func__);
         ret = GGML_STATUS_FAILED;
@@ -1264,7 +1264,7 @@ int lfg_context::encode(const lfg_batch & batch_inp) {
     }
 
     ggml_status status;
-    const auto * res = process_ubatch(ubatch, is_enc_dec ? LLM_GRAPH_TYPE_ENCODER : LLM_GRAPH_TYPE_DECODER, nullptr, status);
+    const auto * res = process_ubatch(ubatch, is_enc_dec ? LFG_GRAPH_TYPE_ENCODER : LFG_GRAPH_TYPE_DECODER, nullptr, status);
 
     if (is_enc_dec) {
         cparams.causal_attn = causal_attn_org;
@@ -1640,7 +1640,7 @@ int lfg_context::decode(const lfg_batch & batch_inp) {
         }
 
         ggml_status status;
-        const auto * res = process_ubatch(ubatch, LLM_GRAPH_TYPE_DECODER, mctx.get(), status);
+        const auto * res = process_ubatch(ubatch, LFG_GRAPH_TYPE_DECODER, mctx.get(), status);
 
         if (!res) {
             // the last ubatch failed or was aborted -> remove all positions of that ubatch from the memory module
@@ -2075,8 +2075,8 @@ uint32_t lfg_context::graph_max_nodes(uint32_t n_tokens) const {
     return res;
 }
 
-llm_graph_result * lfg_context::get_gf_res_reserve() const {
-    return static_cast<llm_graph_result *>(gf_res_reserve.get());
+lfg_graph_result * lfg_context::get_gf_res_reserve() const {
+    return static_cast<lfg_graph_result *>(gf_res_reserve.get());
 }
 
 ggml_cgraph * lfg_context::graph_reserve(
@@ -2116,7 +2116,7 @@ ggml_cgraph * lfg_context::graph_reserve(
 
     auto * res = gf_res_reserve.get();
 
-    const auto gparams = graph_params(res, ubatch, mctx, LLM_GRAPH_TYPE_DEFAULT);
+    const auto gparams = graph_params(res, ubatch, mctx, LFG_GRAPH_TYPE_DEFAULT);
 
     res->reset();
 
@@ -2140,11 +2140,11 @@ ggml_cgraph * lfg_context::graph_reserve(
     return gf;
 }
 
-llm_graph_params lfg_context::graph_params(
-                        llm_graph_result * res,
+lfg_graph_params lfg_context::graph_params(
+                        lfg_graph_result * res,
                       const lfg_ubatch & ubatch,
             const lfg_memory_context_i * mctx,
-                          llm_graph_type   gtype) const {
+                          lfg_graph_type   gtype) const {
     return {
         /*.arch        =*/ model.arch,
         /*.hparams     =*/ model.hparams,
@@ -2193,7 +2193,7 @@ ggml_status lfg_context::graph_compute(
     return status;
 }
 
-llm_graph_cb lfg_context::graph_get_cb() const {
+lfg_graph_cb lfg_context::graph_get_cb() const {
     return [&](const lfg_ubatch & ubatch, ggml_tensor * cur, const char * name, int il) {
         if (il >= 0) {
             ggml_format_name(cur, "%s-%d", name, il);
@@ -2553,7 +2553,7 @@ size_t lfg_context::state_write_data(lfg_io_write_i & io) {
 
     // write model info
     {
-        const std::string arch_str = llm_arch_name(model.arch);
+        const std::string arch_str = lfg_arch_name(model.arch);
         io.write_string(arch_str);
         // TODO: add more model-specific info which should prevent loading the session file if not identical
     }
@@ -2615,12 +2615,12 @@ size_t lfg_context::state_write_data(lfg_io_write_i & io) {
 size_t lfg_context::state_read_data(lfg_io_read_i & io) {
     // read model info
     {
-        const std::string cur_arch_str = llm_arch_name(model.arch);
+        const std::string cur_arch_str = lfg_arch_name(model.arch);
 
         std::string arch_str;
         io.read_string(arch_str);
         if (cur_arch_str != arch_str) {
-            throw std::runtime_error(format("wrong model arch: '%s' instead of '%s'", arch_str.c_str(), cur_arch_str.c_str()));
+            throw std::runtime_error(lfg_format("wrong model arch: '%s' instead of '%s'", arch_str.c_str(), cur_arch_str.c_str()));
         }
         // TODO: add more info which needs to be identical but which is not verified otherwise
     }
@@ -2646,7 +2646,7 @@ size_t lfg_context::state_read_data(lfg_io_read_i & io) {
             for (int32_t i = 0; i < (int32_t) output_pos.size(); ++i) {
                 int32_t id = output_pos[i];
                 if ((uint32_t) id >= n_batch()) {
-                    throw std::runtime_error(format("invalid output id, %d does not fit in batch size of %u", id, n_batch()));
+                    throw std::runtime_error(lfg_format("invalid output id, %d does not fit in batch size of %u", id, n_batch()));
                 }
                 this->output_ids[id] = i;
             }
@@ -2891,7 +2891,7 @@ void lfg_context::opt_epoch_iter(
 
             auto * res = gf_res_prev.get();
 
-            const auto gparams = graph_params(res, ubatch, mctx.get(), LLM_GRAPH_TYPE_DEFAULT);
+            const auto gparams = graph_params(res, ubatch, mctx.get(), LFG_GRAPH_TYPE_DEFAULT);
 
             res->reset();
 

@@ -321,6 +321,16 @@ static void lfg_sampler_softmax_impl(lfg_token_data_array * cur_p, bool do_sort)
         cum_sum += p;
     }
 
+    if (cum_sum <= 0.0f || std::isnan(cum_sum)) {
+        // Degenerate distribution (e.g. grammar rejected everything) — fall back to uniform
+        float uniform_p = 1.0f / (float)cur_p->size;
+        for (size_t i = 0; i < cur_p->size; ++i) {
+            cur_p->data[i].p = uniform_p;
+        }
+        cur_p->sorted = false;
+        return;
+    }
+
     for (size_t i = 0; i < cur_p->size; ++i) {
         cur_p->data[i].p /= cum_sum;
     }
@@ -609,7 +619,7 @@ static bool lfg_sampler_backend_support(
 
     ggml_context_ptr ctx_ptr { ggml_init(params) };
     if (!ctx_ptr) {
-        throw std::runtime_error(format("failed to create ggml context"));
+        throw std::runtime_error(lfg_format("failed to create ggml context"));
     }
 
     ggml_context * ctx = ctx_ptr.get();
@@ -666,7 +676,7 @@ static const char * lfg_sampler_chain_name(const struct lfg_sampler * /*smpl*/) 
 static void lfg_sampler_chain_accept(struct lfg_sampler * smpl, lfg_token token) {
     auto * chain = (lfg_sampler_chain *) smpl->ctx;
 
-    time_meas tm(chain->t_sample_us, chain->params.no_perf);
+    lfg_time_meas tm(chain->t_sample_us, chain->params.no_perf);
 
     for (auto & smpl : chain->samplers) {
         lfg_sampler_accept(smpl.ptr, token);
@@ -678,7 +688,7 @@ static void lfg_sampler_chain_accept(struct lfg_sampler * smpl, lfg_token token)
 static void lfg_sampler_chain_apply(struct lfg_sampler * smpl, lfg_token_data_array * cur_p) {
     auto * chain = (lfg_sampler_chain *) smpl->ctx;
 
-    time_meas tm(chain->t_sample_us, chain->params.no_perf);
+    lfg_time_meas tm(chain->t_sample_us, chain->params.no_perf);
 
     bool is_backend = chain->is_init;
 
@@ -1158,6 +1168,17 @@ static void lfg_sampler_dist_apply(struct lfg_sampler * smpl, lfg_token_data_arr
         float p = expf(cur_p->data[i].logit - max_l);
         cur_p->data[i].p = p;
         sum_cum += p;
+    }
+
+    if (sum_cum <= 0.0 || std::isnan(sum_cum)) {
+        // Degenerate distribution — fall back to uniform and select first token
+        float uniform_p = 1.0f / (float)cur_p->size;
+        for (size_t i = 0; i < cur_p->size; ++i) {
+            cur_p->data[i].p = uniform_p;
+        }
+        cur_p->selected = 0;
+        cur_p->sorted = false;
+        return;
     }
 
 #if 1
@@ -2083,8 +2104,16 @@ static void lfg_sampler_temp_ext_apply(struct lfg_sampler * smpl, lfg_token_data
             cum_sum_double += p;
         }
 
-        for (size_t i = 0; i < cur_p->size; ++i) {
-            cur_p->data[i].p /= cum_sum_double; // Re-normalize the probabilities
+        if (cum_sum_double <= 0.0 || std::isnan(cum_sum_double)) {
+            float uniform_p = 1.0f / (float)cur_p->size;
+            for (size_t i = 0; i < cur_p->size; ++i) {
+                cur_p->data[i].p = uniform_p;
+            }
+            cur_p->sorted = false;
+        } else {
+            for (size_t i = 0; i < cur_p->size; ++i) {
+                cur_p->data[i].p /= cum_sum_double; // Re-normalize the probabilities
+            }
         }
 
     #ifdef DEBUG
@@ -2688,6 +2717,7 @@ static struct lfg_sampler * lfg_sampler_init_grammar_impl(
             /* .grammar      = */ grammar,
         };
         if (!ctx->grammar) {
+            lfg_set_last_error(LFG_ERROR_INTERNAL, "%s: failed to parse grammar", __func__);
             delete ctx;
             return nullptr;
         }
@@ -4255,6 +4285,8 @@ static void lfg_sampler_reasoning_gate_accept(struct lfg_sampler * smpl, lfg_tok
                 // End of reasoning -> Activate grammar
                 ctx->state = lfg_sampler_reasoning_gate::ACTIVE;
                 ctx->match_len = 0;
+                // Defensive: ensure grammar starts from a clean initial state
+                lfg_sampler_reset(ctx->wrapped);
             }
         } else {
             if (ctx->match_len > 0) {

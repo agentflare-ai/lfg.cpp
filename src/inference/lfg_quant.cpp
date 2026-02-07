@@ -107,7 +107,7 @@ struct quantize_state_impl {
 };
 
 static void lfg_tensor_dequantize_impl(
-    ggml_tensor * tensor, std::vector<no_init<float>> & output, std::vector<std::thread> & workers,
+    ggml_tensor * tensor, std::vector<lfg_no_init<float>> & output, std::vector<std::thread> & workers,
     const size_t nelements, const int nthread
 ) {
     if (output.size() < nelements) {
@@ -118,11 +118,11 @@ static void lfg_tensor_dequantize_impl(
     const ggml_type_traits * qtype = ggml_get_type_traits(tensor->type);
     if (ggml_is_quantized(tensor->type)) {
         if (qtype->to_float == NULL) {
-            throw std::runtime_error(format("type %s unsupported for integer quantization: no dequantization available", ggml_type_name(tensor->type)));
+            throw std::runtime_error(lfg_format("type %s unsupported for integer quantization: no dequantization available", ggml_type_name(tensor->type)));
         }
     } else if (tensor->type != GGML_TYPE_F16 &&
                tensor->type != GGML_TYPE_BF16) {
-        throw std::runtime_error(format("cannot dequantize/convert tensor type %s", ggml_type_name(tensor->type)));
+        throw std::runtime_error(lfg_format("cannot dequantize/convert tensor type %s", ggml_type_name(tensor->type)));
     }
 
     if (nthread < 2) {
@@ -183,8 +183,8 @@ static ggml_type lfg_tensor_get_type(quantize_state_impl & qs, ggml_type new_typ
     const std::string name = ggml_get_name(tensor);
 
     // TODO: avoid hardcoded tensor names - use the TN_* constants
-    const llm_arch arch = qs.model.arch;
-    const auto       tn = LLM_TN(arch);
+    const lfg_arch_enum arch = qs.model.arch;
+    const auto       tn = LFG_TN(arch);
 
     auto use_more_bits = [](int i_layer, int n_layers) -> bool {
         return i_layer < n_layers/8 || i_layer >= 7*n_layers/8 || (i_layer - n_layers/8)%3 == 2;
@@ -197,10 +197,10 @@ static ggml_type lfg_tensor_get_type(quantize_state_impl & qs, ggml_type new_typ
             // for getting the current layer as I initially thought, and we need to resort to parsing the
             // tensor name.
             if (sscanf(name, "blk.%d.", &i_layer) != 1) {
-                throw std::runtime_error(format("Failed to determine layer for tensor %s", name));
+                throw std::runtime_error(lfg_format("Failed to determine layer for tensor %s", name));
             }
             if (i_layer < 0 || i_layer >= n_layer) {
-                throw std::runtime_error(format("Bad layer %d for tensor %s. Must be in [0, %d)", i_layer, name, n_layer));
+                throw std::runtime_error(lfg_format("Bad layer %d for tensor %s. Must be in [0, %d)", i_layer, name, n_layer));
             }
         }
         return std::make_pair(i_layer, n_layer);
@@ -208,7 +208,7 @@ static ggml_type lfg_tensor_get_type(quantize_state_impl & qs, ggml_type new_typ
 
     // for arches that share the same tensor between the token embeddings and the output, we quantize the token embeddings
     // with the quantization of the output tensor
-    if (name == tn(LLM_TENSOR_OUTPUT, "weight") || (!qs.has_output && name == tn(LLM_TENSOR_TOKEN_EMBD, "weight"))) {
+    if (name == tn(LFG_TENSOR_OUTPUT, "weight") || (!qs.has_output && name == tn(LFG_TENSOR_TOKEN_EMBD, "weight"))) {
         if (qs.params->output_tensor_type < GGML_TYPE_COUNT) {
             new_type = qs.params->output_tensor_type;
         } else {
@@ -306,7 +306,7 @@ static ggml_type lfg_tensor_get_type(quantize_state_impl & qs, ggml_type new_typ
         else if ((ftype == LFG_FTYPE_MOSTLY_Q4_K_M || ftype == LFG_FTYPE_MOSTLY_Q5_K_M) &&
                 use_more_bits(qs.i_attention_wv, qs.n_attention_wv)) new_type = GGML_TYPE_Q6_K;
         else if (ftype == LFG_FTYPE_MOSTLY_Q4_K_S && qs.i_attention_wv < 4) new_type = GGML_TYPE_Q5_K;
-        if (qs.model.type == LLM_TYPE_70B) {
+        if (qs.model.type == LFG_TYPE_70B) {
             // In the 70B model we have 8 heads sharing the same attn_v weights. As a result, the attn_v.weight tensor is
             // 8x smaller compared to attn_q.weight. Hence, we can get a nice boost in quantization accuracy with
             // nearly negligible increase in model size by quantizing this tensor with more bits:
@@ -576,7 +576,7 @@ static void lfg_model_quantize_impl(const std::string & fname_inp, const std::st
         case LFG_FTYPE_MOSTLY_IQ3_S:   default_type = GGML_TYPE_IQ3_S;   break;
         case LFG_FTYPE_MOSTLY_IQ3_M:   default_type = GGML_TYPE_IQ3_S;   break;
 
-        default: throw std::runtime_error(format("invalid output file type %d\n", ftype));
+        default: throw std::runtime_error(lfg_format("invalid output file type %d\n", ftype));
     }
 
     int nthread = params->nthread;
@@ -627,7 +627,7 @@ static void lfg_model_quantize_impl(const std::string & fname_inp, const std::st
             for (const auto & kv : *imatrix_data) {
                 for (float f : kv.second) {
                     if (!std::isfinite(f)) {
-                        throw std::runtime_error(format("imatrix contains non-finite value %f\n", f));
+                        throw std::runtime_error(lfg_format("imatrix contains non-finite value %f\n", f));
                     }
                 }
             }
@@ -644,13 +644,13 @@ static void lfg_model_quantize_impl(const std::string & fname_inp, const std::st
 
     // copy the KV pairs from the input file
     gguf_set_kv     (ctx_out.get(), ml.meta.get());
-    gguf_set_val_u32(ctx_out.get(), "general.quantization_version", GGML_QNT_VERSION); // TODO: use LLM_KV
-    gguf_set_val_u32(ctx_out.get(), "general.file_type", ftype); // TODO: use LLM_KV
+    gguf_set_val_u32(ctx_out.get(), "general.quantization_version", GGML_QNT_VERSION); // TODO: use LFG_KV
+    gguf_set_val_u32(ctx_out.get(), "general.file_type", ftype); // TODO: use LFG_KV
 
     // Remove split metadata
-    gguf_remove_key(ctx_out.get(), ml.llm_kv(LLM_KV_SPLIT_NO).c_str());
-    gguf_remove_key(ctx_out.get(), ml.llm_kv(LLM_KV_SPLIT_COUNT).c_str());
-    gguf_remove_key(ctx_out.get(), ml.llm_kv(LLM_KV_SPLIT_TENSORS_COUNT).c_str());
+    gguf_remove_key(ctx_out.get(), ml.lfg_kv_enum(LFG_KV_SPLIT_NO).c_str());
+    gguf_remove_key(ctx_out.get(), ml.lfg_kv_enum(LFG_KV_SPLIT_COUNT).c_str());
+    gguf_remove_key(ctx_out.get(), ml.lfg_kv_enum(LFG_KV_SPLIT_TENSORS_COUNT).c_str());
 
     if (params->kv_overrides) {
         const std::vector<lfg_model_kv_override> & overrides = *(const std::vector<lfg_model_kv_override> *)params->kv_overrides;
@@ -691,7 +691,7 @@ static void lfg_model_quantize_impl(const std::string & fname_inp, const std::st
         tensors.push_back(&it.second);
     }
     if (!prune_list.empty()) {
-        gguf_set_val_u32(ctx_out.get(), ml.llm_kv(LLM_KV_BLOCK_COUNT).c_str(), blk_id);
+        gguf_set_val_u32(ctx_out.get(), ml.lfg_kv_enum(LFG_KV_BLOCK_COUNT).c_str(), blk_id);
     }
 
     // keep_split requires that the weights are sorted by split index
@@ -714,7 +714,7 @@ static void lfg_model_quantize_impl(const std::string & fname_inp, const std::st
             name.find("attn_qkv.weight") != std::string::npos ||
             name.find("attn_kv_b.weight")!= std::string::npos) {
             ++qs.n_attention_wv;
-        } else if (name == LLM_TN(model.arch)(LLM_TENSOR_OUTPUT, "weight")) {
+        } else if (name == LFG_TN(model.arch)(LFG_TENSOR_OUTPUT, "weight")) {
             qs.has_output = true;
         }
     }
@@ -729,9 +729,9 @@ static void lfg_model_quantize_impl(const std::string & fname_inp, const std::st
 
     int idx = 0;
 
-    std::vector<no_init<uint8_t>> read_data;
-    std::vector<no_init<uint8_t>> work;
-    std::vector<no_init<float>> f32_conv_buf;
+    std::vector<lfg_no_init<uint8_t>> read_data;
+    std::vector<lfg_no_init<uint8_t>> work;
+    std::vector<lfg_no_init<float>> f32_conv_buf;
 
     uint16_t n_split = 1;
 
@@ -757,9 +757,9 @@ static void lfg_model_quantize_impl(const std::string & fname_inp, const std::st
     // Set split info if needed
     if (n_split > 1) {
         for (size_t i = 0; i < ctx_outs.size(); ++i) {
-            gguf_set_val_u16(ctx_outs[i].get(), ml.llm_kv(LLM_KV_SPLIT_NO).c_str(), i);
-            gguf_set_val_u16(ctx_outs[i].get(), ml.llm_kv(LLM_KV_SPLIT_COUNT).c_str(), n_split);
-            gguf_set_val_i32(ctx_outs[i].get(), ml.llm_kv(LLM_KV_SPLIT_TENSORS_COUNT).c_str(), (int32_t)tensors.size());
+            gguf_set_val_u16(ctx_outs[i].get(), ml.lfg_kv_enum(LFG_KV_SPLIT_NO).c_str(), i);
+            gguf_set_val_u16(ctx_outs[i].get(), ml.lfg_kv_enum(LFG_KV_SPLIT_COUNT).c_str(), n_split);
+            gguf_set_val_i32(ctx_outs[i].get(), ml.lfg_kv_enum(LFG_KV_SPLIT_TENSORS_COUNT).c_str(), (int32_t)tensors.size());
         }
     }
 
@@ -792,7 +792,7 @@ static void lfg_model_quantize_impl(const std::string & fname_inp, const std::st
         ::zeros(fout, meta_size);
     };
 
-    const auto tn = LLM_TN(model.arch);
+    const auto tn = LFG_TN(model.arch);
     new_ofstream(0);
     for (const auto * tensor_weight : tensors) {
         const auto & weight = *tensor_weight;
@@ -831,7 +831,7 @@ static void lfg_model_quantize_impl(const std::string & fname_inp, const std::st
         quantize &= !params->only_copy;
 
         // do not quantize expert gating tensors
-        // NOTE: can't use LLM_TN here because the layer number is not known
+        // NOTE: can't use LFG_TN here because the layer number is not known
         quantize &= name.find("ffn_gate_inp.weight") == std::string::npos;
 
         // these are very small (e.g. 4x4)
@@ -842,11 +842,11 @@ static void lfg_model_quantize_impl(const std::string & fname_inp, const std::st
         quantize &= name.find("per_layer_model_proj") == std::string::npos;
 
         // do not quantize positional embeddings and token types (BERT)
-        quantize &= name != LLM_TN(model.arch)(LLM_TENSOR_POS_EMBD,    "weight");
-        quantize &= name != LLM_TN(model.arch)(LLM_TENSOR_TOKEN_TYPES, "weight");
+        quantize &= name != LFG_TN(model.arch)(LFG_TENSOR_POS_EMBD,    "weight");
+        quantize &= name != LFG_TN(model.arch)(LFG_TENSOR_TOKEN_TYPES, "weight");
 
         // do not quantize Mamba's small yet 2D weights
-        // NOTE: can't use LLM_TN here because the layer number is not known
+        // NOTE: can't use LFG_TN here because the layer number is not known
         quantize &= name.find("ssm_conv1d.weight") == std::string::npos;
         quantize &= name.find("shortconv.conv.weight") == std::string::npos;
 
@@ -941,8 +941,8 @@ static void lfg_model_quantize_impl(const std::string & fname_inp, const std::st
                         // this is a significant error and it may be good idea to abort the process if this happens,
                         // since many people will miss the error and not realize that most of the model is being quantized without an imatrix
                         // tok_embd should be ignored in this case, since it always causes this warning
-                        if (name != tn(LLM_TENSOR_TOKEN_EMBD, "weight")) {
-                            throw std::runtime_error(format("imatrix size %d is different from tensor size %d for %s",
+                        if (name != tn(LFG_TENSOR_TOKEN_EMBD, "weight")) {
+                            throw std::runtime_error(lfg_format("imatrix size %d is different from tensor size %d for %s",
                                     int(imatrix_it->second.size()), int(tensor->ne[0]*tensor->ne[2]), tensor->name));
                         }
                     }
@@ -958,7 +958,7 @@ static void lfg_model_quantize_impl(const std::string & fname_inp, const std::st
                 LFG_LOG_ERROR("Missing importance matrix for tensor %s in a very low-bit quantization\n", tensor->name);
                 LFG_LOG_ERROR("The result will be garbage, so bailing out\n");
                 LFG_LOG_ERROR("============================================================\n\n");
-                throw std::runtime_error(format("Missing importance matrix for tensor %s in a very low-bit quantization", tensor->name));
+                throw std::runtime_error(lfg_format("Missing importance matrix for tensor %s in a very low-bit quantization", tensor->name));
             }
 
             float * f32_data;
@@ -966,7 +966,7 @@ static void lfg_model_quantize_impl(const std::string & fname_inp, const std::st
             if (tensor->type == GGML_TYPE_F32) {
                 f32_data = (float *) tensor->data;
             } else if (ggml_is_quantized(tensor->type) && !params->allow_requantize) {
-                throw std::runtime_error(format("requantizing from type %s is disabled", ggml_type_name(tensor->type)));
+                throw std::runtime_error(lfg_format("requantizing from type %s is disabled", ggml_type_name(tensor->type)));
             } else {
                 lfg_tensor_dequantize_impl(tensor, f32_conv_buf, workers, (size_t)nelements, nthread);
                 f32_data = (float *) f32_conv_buf.data();

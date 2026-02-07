@@ -49,9 +49,9 @@ void lfg_log_callback_default(ggml_log_level level, const char * text, void * us
 //
 
 template <typename T>
-struct no_init {
+struct lfg_no_init {
     T value;
-    no_init() = default;
+    lfg_no_init() = default;
 };
 
 // error handling (thread-local, implemented in lfg_error.cpp)
@@ -66,25 +66,24 @@ inline bool lfg_check_ptr(const void * ptr, enum lfg_error code, const char * fn
     return false;
 }
 
-struct time_meas {
-    time_meas(int64_t & t_acc, bool disable = false);
-    ~time_meas();
+struct lfg_time_meas {
+    lfg_time_meas(int64_t & t_acc, bool disable = false);
+    ~lfg_time_meas();
 
     const int64_t t_start_us;
 
     int64_t & t_acc;
 };
 
-void replace_all(std::string & s, const std::string & search, const std::string & replace);
+void lfg_replace_all(std::string & s, const std::string & search, const std::string & replace);
 
-// TODO: rename to lfg_format ?
 LFG_ATTRIBUTE_FORMAT(1, 2)
-std::string format(const char * fmt, ...);
+std::string lfg_format(const char * fmt, ...);
 
 std::string lfg_format_tensor_shape(const std::vector<int64_t> & ne);
 std::string lfg_format_tensor_shape(const struct ggml_tensor * t);
 
-std::string gguf_kv_to_str(const struct gguf_context * ctx_gguf, int i);
+std::string lfg_gguf_kv_to_str(const struct gguf_context * ctx_gguf, int i);
 
 #define LFG_TENSOR_NAME_FATTN "__fattn__"
 #endif // __cplusplus

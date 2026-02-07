@@ -8,24 +8,24 @@
 struct lfg_model_saver {
     struct gguf_context * gguf_ctx = nullptr;
     const struct lfg_model & model;
-    const struct LLM_KV llm_kv;
+    const struct LFG_KV lfg_kv_enum;
 
     lfg_model_saver(const struct lfg_model & model);
     ~lfg_model_saver();
 
-    void add_kv(enum llm_kv key, uint32_t     value);
-    void add_kv(enum llm_kv key, int32_t      value);
-    void add_kv(enum llm_kv key, float        value);
-    void add_kv(enum llm_kv key, bool         value);
-    void add_kv(enum llm_kv key, const char * value);
+    void add_kv(enum lfg_kv_enum key, uint32_t     value);
+    void add_kv(enum lfg_kv_enum key, int32_t      value);
+    void add_kv(enum lfg_kv_enum key, float        value);
+    void add_kv(enum lfg_kv_enum key, bool         value);
+    void add_kv(enum lfg_kv_enum key, const char * value);
 
     [[noreturn]]
-    void add_kv(enum llm_kv key, char value); // needed to make the template below compile
+    void add_kv(enum lfg_kv_enum key, char value); // needed to make the template below compile
 
     template <typename Container>
-    void add_kv(enum llm_kv key, const Container & value, bool per_layer = false);
+    void add_kv(enum lfg_kv_enum key, const Container & value, bool per_layer = false);
 
-    void add_kv(enum llm_kv key, const std::vector<std::string> & value);
+    void add_kv(enum lfg_kv_enum key, const std::vector<std::string> & value);
 
     void add_tensor(const struct ggml_tensor * tensor);
 

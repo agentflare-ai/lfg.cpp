@@ -17,9 +17,9 @@ struct lfg_logger_state {
 
 static lfg_logger_state g_logger_state;
 
-time_meas::time_meas(int64_t & t_acc, bool disable) : t_start_us(disable ? -1 : ggml_time_us()), t_acc(t_acc) {}
+lfg_time_meas::lfg_time_meas(int64_t & t_acc, bool disable) : t_start_us(disable ? -1 : ggml_time_us()), t_acc(t_acc) {}
 
-time_meas::~time_meas() {
+lfg_time_meas::~lfg_time_meas() {
     if (t_start_us >= 0) {
         t_acc += ggml_time_us() - t_start_us;
     }
@@ -70,7 +70,7 @@ void lfg_log_callback_default(ggml_log_level level, const char * text, void * us
     }
 }
 
-void replace_all(std::string & s, const std::string & search, const std::string & replace) {
+void lfg_replace_all(std::string & s, const std::string & search, const std::string & replace) {
     if (search.empty()) {
         return;
     }
@@ -87,7 +87,7 @@ void replace_all(std::string & s, const std::string & search, const std::string 
     s = std::move(builder);
 }
 
-std::string format(const char * fmt, ...) {
+std::string lfg_format(const char * fmt, ...) {
     va_list ap;
     va_list ap2;
     va_start(ap, fmt);
@@ -133,11 +133,11 @@ static std::string gguf_data_to_str(enum gguf_type type, const void * data, int 
         case GGUF_TYPE_FLOAT32: return std::to_string(((const float    *)data)[i]);
         case GGUF_TYPE_FLOAT64: return std::to_string(((const double   *)data)[i]);
         case GGUF_TYPE_BOOL:    return ((const bool *)data)[i] ? "true" : "false";
-        default:                return format("unknown type %d", type);
+        default:                return lfg_format("unknown type %d", type);
     }
 }
 
-std::string gguf_kv_to_str(const struct gguf_context * ctx_gguf, int i) {
+std::string lfg_gguf_kv_to_str(const struct gguf_context * ctx_gguf, int i) {
     const enum gguf_type type = gguf_get_kv_type(ctx_gguf, i);
 
     switch (type) {
@@ -154,8 +154,8 @@ std::string gguf_kv_to_str(const struct gguf_context * ctx_gguf, int i) {
                     if (arr_type == GGUF_TYPE_STRING) {
                         std::string val = gguf_get_arr_str(ctx_gguf, i, j);
                         // escape quotes
-                        replace_all(val, "\\", "\\\\");
-                        replace_all(val, "\"", "\\\"");
+                        lfg_replace_all(val, "\\", "\\\\");
+                        lfg_replace_all(val, "\"", "\\\"");
                         ss << '"' << val << '"';
                     } else if (arr_type == GGUF_TYPE_ARRAY) {
                         ss << "???";

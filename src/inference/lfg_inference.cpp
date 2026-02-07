@@ -125,7 +125,7 @@ static std::vector<lfg_device_memory_data> lfg_get_device_memory_data(
         if (free == 0 && total == 0) {
             ggml_backend_dev_t cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
             if (cpu_dev == nullptr) {
-                throw std::runtime_error(format("%s: no CPU backend found", __func__));
+                throw std::runtime_error(lfg_format("%s: no CPU backend found", __func__));
             }
             ggml_backend_dev_memory(cpu_dev, &free, &total);
         }
@@ -847,7 +847,7 @@ static int lfg_model_load(const std::string & fname, std::vector<std::string> & 
     // loading time will be recalculated after the first eval, so
     // we take page faults deferred by mmap() into consideration
     model.t_load_us = 0;
-    time_meas tm(model.t_load_us);
+    lfg_time_meas tm(model.t_load_us);
 
     model.t_start_us = tm.t_start_us;
 
@@ -1187,12 +1187,12 @@ int32_t lfg_chat_apply_template(
         }
 
         std::string formatted_chat;
-        llm_chat_template detected_tmpl = llm_chat_detect_template(curr_tmpl);
-        if (detected_tmpl == LLM_CHAT_TEMPLATE_UNKNOWN) {
+        lfg_chat_template detected_tmpl = lfg_chat_detect_template(curr_tmpl);
+        if (detected_tmpl == LFG_CHAT_TEMPLATE_UNKNOWN) {
             lfg_set_last_error(LFG_ERROR_UNSUPPORTED, "%s: unknown chat template", __func__);
             return -1;
         }
-        int32_t res = llm_chat_apply_template(detected_tmpl, chat_vec, formatted_chat, add_ass);
+        int32_t res = lfg_chat_apply_template(detected_tmpl, chat_vec, formatted_chat, add_ass);
         if (res < 0) {
             lfg_set_last_error(LFG_ERROR_INTERNAL, "%s: failed to apply chat template", __func__);
             return res;

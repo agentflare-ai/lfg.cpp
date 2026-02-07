@@ -713,6 +713,24 @@ fn addExecutables(
     addCommonExeLinks(lfg_struct, target, framework_path, private_framework_path, sysroot);
     b.installArtifact(lfg_struct);
 
+    const bare_thinking = addExe(b, target, optimize, "bare-thinking-test", &[_][]const u8{"src/eval/bare_thinking_test.cpp"}, spdlog_include, cxx_flags, framework_path, private_framework_path);
+    bare_thinking.linkLibrary(lfg_core);
+    bare_thinking.linkLibrary(ggml);
+    addCommonExeLinks(bare_thinking, target, framework_path, private_framework_path, sysroot);
+    b.installArtifact(bare_thinking);
+
+    const verify_thinking = addExe(b, target, optimize, "verify-thinking-structured", &[_][]const u8{"src/eval/verify_thinking_structured.cpp"}, spdlog_include, cxx_flags, framework_path, private_framework_path);
+    verify_thinking.linkLibrary(lfg_core);
+    verify_thinking.linkLibrary(ggml);
+    addCommonExeLinks(verify_thinking, target, framework_path, private_framework_path, sysroot);
+    b.installArtifact(verify_thinking);
+
+    const compare_rmsnorm = addExe(b, target, optimize, "compare-rmsnorm", &[_][]const u8{"src/eval/compare_rmsnorm.cpp"}, spdlog_include, cxx_flags, framework_path, private_framework_path);
+    compare_rmsnorm.linkLibrary(lfg_core);
+    compare_rmsnorm.linkLibrary(ggml);
+    addCommonExeLinks(compare_rmsnorm, target, framework_path, private_framework_path, sysroot);
+    b.installArtifact(compare_rmsnorm);
+
     const llama_struct = addExe(b, target, optimize, "llama-structured-compare", &[_][]const u8{
         "src/eval/llama_structured_compare.cpp",
         "src/inference/json_schema_to_grammar.cpp",
@@ -724,7 +742,7 @@ fn addExecutables(
     addCommonExeLinks(llama_struct, target, framework_path, private_framework_path, sysroot);
     b.installArtifact(llama_struct);
 
-    addBenchmarks(b, target, optimize, ggml, lfg_core, spdlog_include, cxx_flags, framework_path, private_framework_path, sysroot);
+    addBenchmarks(b, target, optimize, ggml, llama_core, lfg_core, spdlog_include, cxx_flags, framework_path, private_framework_path, sysroot);
     addTests(b, target, optimize, ggml, lfg_core, spdlog_include, cxx_flags, framework_path, private_framework_path, sysroot);
 }
 
@@ -733,6 +751,7 @@ fn addBenchmarks(
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     ggml: *std.Build.Step.Compile,
+    llama_core: *std.Build.Step.Compile,
     lfg_core: *std.Build.Step.Compile,
     spdlog_include: std.Build.LazyPath,
     cxx_flags: []const []const u8,
@@ -762,6 +781,17 @@ fn addBenchmarks(
         b.installArtifact(exe);
         bench_step.dependOn(&exe.step);
     }
+
+    // benchmark_perf_compare: links both lfg_core and llama_core for head-to-head comparison
+    const perf_compare = addExe(b, target, optimize, "benchmark_perf_compare", &[_][]const u8{"src/benchmarks/benchmark_perf_compare.cpp"}, spdlog_include, cxx_flags, framework_path, private_framework_path);
+    perf_compare.addIncludePath(b.path("third_party/llama.cpp/include"));
+    perf_compare.addIncludePath(b.path("src/ggml"));
+    perf_compare.linkLibrary(lfg_core);
+    perf_compare.linkLibrary(llama_core);
+    perf_compare.linkLibrary(ggml);
+    addCommonExeLinks(perf_compare, target, framework_path, private_framework_path, sysroot);
+    b.installArtifact(perf_compare);
+    bench_step.dependOn(&perf_compare.step);
 }
 
 fn addTests(
@@ -797,6 +827,13 @@ fn addTests(
         "test_reasoning_gate",
         "test_model_capabilities",
         "test_parity",
+        "test_softmax_safety",
+        "test_grammar_completion",
+        "test_stop_sequences",
+        "test_json_schema_to_grammar",
+        "test_session_lifecycle",
+        "test_checkpoint_state",
+        "test_max_tokens_reasoning",
     };
 
     const test_files = [_][]const u8{
@@ -820,6 +857,13 @@ fn addTests(
         "src/tests/test_reasoning_gate.cpp",
         "src/tests/test_model_capabilities.cpp",
         "src/tests/test_parity.cpp",
+        "src/tests/test_softmax_safety.cpp",
+        "src/tests/test_grammar_completion.cpp",
+        "src/tests/test_stop_sequences.cpp",
+        "src/tests/test_json_schema_to_grammar.cpp",
+        "src/tests/test_session_lifecycle.cpp",
+        "src/tests/test_checkpoint_state.cpp",
+        "src/tests/test_max_tokens_reasoning.cpp",
     };
 
     var test_step = b.step("test", "Build and run tests");
