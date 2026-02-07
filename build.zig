@@ -856,6 +856,7 @@ fn addTests(
         "test_entropy_monitor",
         "test_confidence_monitor",
         "test_generate_loop",
+        "test_structured_generate",
     };
 
     const test_files = [_][]const u8{
@@ -890,6 +891,7 @@ fn addTests(
         "src/tests/test_entropy_monitor.cpp",
         "src/tests/test_confidence_monitor.cpp",
         "src/tests/test_generate_loop.cpp",
+        "src/tests/test_structured_generate.cpp",
     };
 
     var test_step = b.step("test", "Build and run tests");

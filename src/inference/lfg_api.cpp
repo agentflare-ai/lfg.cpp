@@ -2309,7 +2309,10 @@ LFG_API lfg_generate_result lfg_session_prompt_generate(
         return result;
     }
 
-    lfg_session_ingest_tokens(session, tokens, n, true);
+    // Prompt tokens must NOT be fed through the grammar sampler — grammar
+    // constrains generated output only.  Pass update_sampler=false so the
+    // grammar (and other accept-sensitive samplers) never see prompt tokens.
+    lfg_session_ingest_tokens(session, tokens, n, false);
     free(tokens);
 
     return lfg_session_generate(session, config);
@@ -2358,8 +2361,8 @@ LFG_API lfg_generate_result lfg_session_chat_generate(
         return result;
     }
 
-    // 4. Ingest prompt
-    lfg_session_ingest_tokens(session, tokens, n, true);
+    // 4. Ingest prompt — update_sampler=false so grammar isn't fed prompt tokens
+    lfg_session_ingest_tokens(session, tokens, n, false);
     free(tokens);
 
     // 5. Generate
