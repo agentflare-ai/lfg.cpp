@@ -75,6 +75,25 @@ static void lfg_buf_size_free(lfg_buf_size *b) {
 }
 
 // ---------------------------------------------------------------------------
+// Internal entropy monitor types (pre-allocated at configure time)
+// ---------------------------------------------------------------------------
+
+struct lfg_entropy_ring_slot {
+    lfg_entropy_event event;
+    float            *embedding;  // Points into entropy_embd_pool
+};
+
+struct lfg_entropy_snap {
+    int32_t  n_past;
+    size_t   token_count;
+    size_t   sampler_count;
+    int32_t  generated_count;
+    size_t   reasoning_token_count;
+    int32_t  id;
+    bool     valid;
+};
+
+// ---------------------------------------------------------------------------
 // Opaque session struct (flat C, pre-allocated buffers)
 // ---------------------------------------------------------------------------
 
@@ -159,6 +178,24 @@ struct lfg_session {
 
     int32_t          tool_top_k;            // 0 = disabled
     bool             tools_injected;       // Reset on session_reset()
+
+    // Entropy monitor config
+    float                entropy_threshold;
+    int32_t              entropy_cooldown;
+    int32_t              entropy_tokens_since;
+    float                entropy_last;
+    float                entropy_last_norm;
+    bool                 entropy_active;
+
+    // SPSC ring buffer (pre-allocated at configure time)
+    lfg_entropy_ring_slot *entropy_slots;
+    lfg_entropy_snap      *entropy_snaps;
+    float                 *entropy_embd_pool;
+    int32_t                entropy_ring_cap;
+    volatile int32_t       entropy_write_idx;
+    int32_t                entropy_read_idx;
+    int32_t                entropy_next_id;
+    int32_t                entropy_n_embd;
 };
 
 // ---------------------------------------------------------------------------
@@ -221,6 +258,51 @@ static void l2_normalize(float *vec, int n) {
     for (int i = 0; i < n; ++i) sum += vec[i] * vec[i];
     float inv_norm = (sum > 0.0f) ? (1.0f / std::sqrt(sum)) : 0.0f;
     for (int i = 0; i < n; ++i) vec[i] *= inv_norm;
+}
+
+// ---------------------------------------------------------------------------
+// Shared embedding context helpers (used by tool ranking + entropy monitor)
+// ---------------------------------------------------------------------------
+
+// Ensure session has a tool_ctx for embeddings. Returns false on failure.
+static bool session_ensure_embed_ctx(lfg_session *s) {
+    if (s->tool_ctx) return true;
+    lfg_context_params tparams = lfg_context_default_params();
+    tparams.n_ctx = 512;
+    tparams.n_batch = 512;
+    tparams.n_threads = s->config.n_threads;
+    tparams.embeddings = true;
+    tparams.pooling_type = LFG_POOLING_TYPE_MEAN;
+    s->tool_ctx = lfg_init_from_model(s->model, tparams);
+    return s->tool_ctx != nullptr;
+}
+
+// Compute mean-pooled embedding of the current prompt into out_embd.
+// Returns true on success. Zero-alloc (uses existing tool_ctx).
+static bool compute_query_embedding(lfg_session *s, float *out_embd) {
+    if (!s->tool_ctx || s->token_history.size == 0) return false;
+
+    int32_t n_embd = lfg_model_n_embd(s->model);
+    lfg_memory_clear(lfg_get_memory(s->tool_ctx), true);
+
+    lfg_token *prompt_tokens = s->token_history.data;
+    int32_t n_prompt = (int32_t)s->token_history.size;
+    int32_t ctx_cap = (int32_t)lfg_n_ctx(s->tool_ctx);
+    if (n_prompt > ctx_cap) {
+        prompt_tokens = s->token_history.data + (n_prompt - ctx_cap);
+        n_prompt = ctx_cap;
+    }
+
+    lfg_batch batch = lfg_batch_get_one(prompt_tokens, n_prompt);
+    if (lfg_decode(s->tool_ctx, batch) != 0) return false;
+
+    float *embd_ptr = lfg_get_embeddings_seq(s->tool_ctx, 0);
+    if (!embd_ptr) embd_ptr = lfg_get_embeddings_ith(s->tool_ctx, -1);
+    if (!embd_ptr) return false;
+
+    std::memcpy(out_embd, embd_ptr, n_embd * sizeof(float));
+    l2_normalize(out_embd, n_embd);
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -611,6 +693,22 @@ LFG_API lfg_session * lfg_session_create(lfg_model * model, const lfg_session_co
     s->tool_top_k = 0;
     s->tools_injected = false;
 
+    // Entropy monitor (all nullptr/zero — allocated in configure_entropy_monitor)
+    s->entropy_threshold = 0.0f;
+    s->entropy_cooldown = 1;
+    s->entropy_tokens_since = 0;
+    s->entropy_last = -1.0f;
+    s->entropy_last_norm = -1.0f;
+    s->entropy_active = false;
+    s->entropy_slots = nullptr;
+    s->entropy_snaps = nullptr;
+    s->entropy_embd_pool = nullptr;
+    s->entropy_ring_cap = 0;
+    s->entropy_write_idx = 0;
+    s->entropy_read_idx = 0;
+    s->entropy_next_id = 0;
+    s->entropy_n_embd = 0;
+
     session_rebuild_sampler(s);
 
     return s;
@@ -637,6 +735,11 @@ LFG_API void lfg_session_free(lfg_session * session) {
     free(session->stop_lengths);
     free(session->pos_buf);
     free(session->logits_buf);
+
+    // Entropy monitor
+    free(session->entropy_slots);
+    free(session->entropy_snaps);
+    free(session->entropy_embd_pool);
 
     free(session);
 }
@@ -665,6 +768,20 @@ LFG_API void lfg_session_reset(lfg_session * session) {
         session->healing_sampler_snapshot = nullptr;
     }
     session->tools_injected = false;
+
+    // Entropy monitor reset
+    if (session->entropy_active) {
+        session->entropy_write_idx = 0;
+        session->entropy_read_idx = 0;
+        session->entropy_next_id = 0;
+        session->entropy_tokens_since = session->entropy_cooldown; // allow first event immediately
+        session->entropy_last = -1.0f;
+        session->entropy_last_norm = -1.0f;
+        // Invalidate all snaps
+        for (int32_t i = 0; i < session->entropy_ring_cap; ++i) {
+            session->entropy_snaps[i].valid = false;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -874,34 +991,7 @@ LFG_API bool lfg_session_decode(lfg_session * session) {
     // Tool ranking and injection (only on first decode when tools are registered)
     if (session->tool_count > 0 && !session->tools_injected && session->tool_top_k > 0) {
         int32_t n_embd = session->tool_n_embd;
-        bool got_query_embd = false;
-
-        // Compute mean-pooled query embedding via tool_ctx (same pooling as tool embeddings)
-        int32_t n_prompt = (int32_t)session->token_history.size;
-        if (n_prompt > 0 && session->tool_ctx) {
-            lfg_memory_clear(lfg_get_memory(session->tool_ctx), true);
-
-            // Truncate to tool_ctx capacity if prompt is too long
-            lfg_token *prompt_tokens = session->token_history.data;
-            int32_t ctx_cap = (int32_t)lfg_n_ctx(session->tool_ctx);
-            if (n_prompt > ctx_cap) {
-                prompt_tokens = session->token_history.data + (n_prompt - ctx_cap);
-                n_prompt = ctx_cap;
-            }
-
-            lfg_batch batch = lfg_batch_get_one(prompt_tokens, n_prompt);
-            if (lfg_decode(session->tool_ctx, batch) == 0) {
-                float *embd_ptr = lfg_get_embeddings_seq(session->tool_ctx, 0);
-                if (!embd_ptr) {
-                    embd_ptr = lfg_get_embeddings_ith(session->tool_ctx, -1);
-                }
-                if (embd_ptr) {
-                    std::memcpy(session->tool_query_embd, embd_ptr, n_embd * sizeof(float));
-                    l2_normalize(session->tool_query_embd, n_embd);
-                    got_query_embd = true;
-                }
-            }
-        }
+        bool got_query_embd = compute_query_embedding(session, session->tool_query_embd);
 
         if (got_query_embd) {
             // Compute cosine similarity into pre-allocated arrays
@@ -1008,6 +1098,66 @@ LFG_API lfg_token lfg_session_sample(lfg_session * session) {
     lfg_token token = lfg_sampler_sample(session->sampler, session->ctx, -1);
     session_record_sampler_token(session, token, true);
     session->generated_count++;
+
+    // Entropy monitoring — zero alloc, no callbacks
+    if (session->entropy_active) {
+        float *logits = lfg_get_logits(session->ctx);
+        int n_vocab = lfg_vocab_n_tokens(lfg_model_get_vocab(session->model));
+
+        // 3-pass softmax + entropy: O(n_vocab), trivial vs decode cost
+        float max_l = logits[0];
+        for (int i = 1; i < n_vocab; ++i) if (logits[i] > max_l) max_l = logits[i];
+        float sum_exp = 0.0f;
+        for (int i = 0; i < n_vocab; ++i) sum_exp += expf(logits[i] - max_l);
+        float entropy = 0.0f, inv = 1.0f / sum_exp, token_prob = 0.0f;
+        for (int i = 0; i < n_vocab; ++i) {
+            float p = expf(logits[i] - max_l) * inv;
+            if (p > 0.0f) entropy -= p * logf(p);
+            if (i == token) token_prob = p;
+        }
+        float max_ent = logf((float)n_vocab);
+        float norm = max_ent > 0 ? entropy / max_ent : 0;
+        session->entropy_last = entropy;
+        session->entropy_last_norm = norm;
+        session->entropy_tokens_since++;
+
+        // Threshold + cooldown gate
+        if (norm >= session->entropy_threshold &&
+            session->entropy_tokens_since >= session->entropy_cooldown) {
+            session->entropy_tokens_since = 0;
+
+            int32_t wi = session->entropy_write_idx;
+            int slot = wi % session->entropy_ring_cap;
+
+            // Save snap (zero alloc — write into pre-alloc'd array)
+            lfg_entropy_snap *snap = &session->entropy_snaps[slot];
+            snap->n_past = session->n_past;
+            snap->token_count = session->token_history.size;
+            snap->sampler_count = session->sampler_history.size;
+            snap->generated_count = session->generated_count;
+            snap->reasoning_token_count = session->reasoning_token_count;
+            snap->id = session->entropy_next_id++;
+            snap->valid = true;
+
+            // Compute embedding into slot's pre-alloc'd buffer
+            float *slot_embd = session->entropy_embd_pool + (slot * session->entropy_n_embd);
+            bool got_embd = compute_query_embedding(session, slot_embd);
+
+            // Write event into ring slot (zero alloc)
+            lfg_entropy_ring_slot *rs = &session->entropy_slots[slot];
+            rs->event.entropy       = entropy;
+            rs->event.normalized    = norm;
+            rs->event.top_logprob   = token_prob > 0 ? logf(token_prob) : -INFINITY;
+            rs->event.token         = token;
+            rs->event.n_past        = session->n_past;
+            rs->event.checkpoint_id = snap->id;
+            rs->event.n_embd        = got_embd ? session->entropy_n_embd : 0;
+            rs->embedding           = got_embd ? slot_embd : nullptr;
+
+            // Publish — atomic store (release semantics)
+            __atomic_store_n(&session->entropy_write_idx, wi + 1, __ATOMIC_RELEASE);
+        }
+    }
 
     // Stop sequence matching: check if tail of token_history + new token matches
     if (session->stop_count > 0) {
@@ -1380,19 +1530,10 @@ LFG_API int32_t lfg_session_register_tools(lfg_session * session,
 
     try {
         // Create tool context if needed (embeddings + mean pooling for semantic similarity)
-        if (!session->tool_ctx) {
-            lfg_context_params tparams = lfg_context_default_params();
-            tparams.n_ctx = 512;
-            tparams.n_batch = 512;
-            tparams.n_threads = session->config.n_threads;
-            tparams.embeddings = true;
-            tparams.pooling_type = LFG_POOLING_TYPE_MEAN;
-            session->tool_ctx = lfg_init_from_model(session->model, tparams);
-            if (!session->tool_ctx) {
-                lfg_set_last_error(LFG_ERROR_INTERNAL,
-                    "%s: failed to create tool context", __func__);
-                return -1;
-            }
+        if (!session_ensure_embed_ctx(session)) {
+            lfg_set_last_error(LFG_ERROR_INTERNAL,
+                "%s: failed to create tool context", __func__);
+            return -1;
         }
 
         const lfg_vocab *vocab = lfg_model_get_vocab(session->model);
@@ -1506,7 +1647,8 @@ LFG_API void lfg_session_clear_tools(lfg_session * session) {
     session_free_tool_entries(session);
     session->tool_top_k = 0;
     session->tools_injected = false;
-    if (session->tool_ctx) {
+    // Only free tool_ctx if entropy monitor isn't using it
+    if (session->tool_ctx && !session->entropy_active) {
         lfg_free(session->tool_ctx);
         session->tool_ctx = nullptr;
     }
@@ -1524,6 +1666,247 @@ LFG_API void lfg_session_clear_tools(lfg_session * session) {
     free(session->tool_token_buf);     session->tool_token_buf = nullptr;
     session->tool_token_buf_cap = 0;
     session->tool_n_embd = 0;
+}
+
+// ---------------------------------------------------------------------------
+// Entropy Monitor API
+// ---------------------------------------------------------------------------
+
+LFG_API lfg_entropy_monitor_config lfg_entropy_monitor_default_config(void) {
+    lfg_entropy_monitor_config cfg{};
+    cfg.threshold = 0.7f;
+    cfg.cooldown_tokens = 16;
+    cfg.ring_size = 4;
+    return cfg;
+}
+
+LFG_API bool lfg_session_configure_entropy_monitor(
+    lfg_session * session, const lfg_entropy_monitor_config * config) {
+    if (!session) return false;
+
+    // Pass NULL to disable
+    if (!config) {
+        session->entropy_active = false;
+        return true;
+    }
+
+    if (!session_ensure_embed_ctx(session)) {
+        lfg_set_last_error(LFG_ERROR_INTERNAL,
+            "%s: failed to create embedding context", __func__);
+        return false;
+    }
+
+    int32_t cap = config->ring_size > 0 ? config->ring_size : 4;
+    int32_t n_embd = lfg_model_n_embd(session->model);
+
+    // Free previous allocations
+    free(session->entropy_slots);
+    free(session->entropy_snaps);
+    free(session->entropy_embd_pool);
+
+    // One-time allocation of ring buffer + embedding pool
+    session->entropy_slots     = (lfg_entropy_ring_slot *)calloc(cap, sizeof(lfg_entropy_ring_slot));
+    session->entropy_snaps     = (lfg_entropy_snap *)calloc(cap, sizeof(lfg_entropy_snap));
+    session->entropy_embd_pool = (float *)calloc(cap * n_embd, sizeof(float));
+
+    // Wire each slot's embedding pointer to pool
+    for (int32_t i = 0; i < cap; ++i) {
+        session->entropy_slots[i].embedding = session->entropy_embd_pool + (i * n_embd);
+    }
+
+    session->entropy_ring_cap     = cap;
+    session->entropy_n_embd       = n_embd;
+    session->entropy_write_idx    = 0;
+    session->entropy_read_idx     = 0;
+    session->entropy_next_id      = 0;
+    session->entropy_threshold    = config->threshold;
+    session->entropy_cooldown     = config->cooldown_tokens > 0 ? config->cooldown_tokens : 1;
+    session->entropy_tokens_since = config->cooldown_tokens > 0 ? config->cooldown_tokens : 1; // allow first event immediately
+    session->entropy_last         = -1.0f;
+    session->entropy_last_norm    = -1.0f;
+    session->entropy_active       = true;
+
+    return true;
+}
+
+LFG_API bool lfg_session_entropy_pop(lfg_session * session,
+                                      lfg_entropy_event * event_out,
+                                      float * embd_out, int32_t embd_cap) {
+    if (!session || !session->entropy_slots) return false;
+
+    int32_t wi = __atomic_load_n(&session->entropy_write_idx, __ATOMIC_ACQUIRE);
+    if (session->entropy_read_idx >= wi) return false;
+
+    int slot = session->entropy_read_idx % session->entropy_ring_cap;
+    lfg_entropy_ring_slot *rs = &session->entropy_slots[slot];
+
+    if (event_out) *event_out = rs->event;
+
+    if (embd_out && rs->embedding && rs->event.n_embd > 0) {
+        int32_t n = rs->event.n_embd < embd_cap ? rs->event.n_embd : embd_cap;
+        std::memcpy(embd_out, rs->embedding, n * sizeof(float));
+    }
+
+    session->entropy_read_idx++;
+    return true;
+}
+
+LFG_API int32_t lfg_session_entropy_pending(lfg_session * session) {
+    if (!session || !session->entropy_slots) return 0;
+    int32_t wi = __atomic_load_n(&session->entropy_write_idx, __ATOMIC_ACQUIRE);
+    int32_t pending = wi - session->entropy_read_idx;
+    return pending > 0 ? pending : 0;
+}
+
+LFG_API void lfg_session_entropy_flush(lfg_session * session) {
+    if (!session) return;
+    session->entropy_read_idx = __atomic_load_n(&session->entropy_write_idx, __ATOMIC_ACQUIRE);
+}
+
+LFG_API volatile int32_t * lfg_session_entropy_counter(lfg_session * session) {
+    if (!session) return nullptr;
+    return &session->entropy_write_idx;
+}
+
+LFG_API bool lfg_session_rewind(lfg_session * session, int32_t checkpoint_id) {
+    if (!session || !session->entropy_snaps) return false;
+
+    // Find snap by checkpoint_id
+    lfg_entropy_snap *snap = nullptr;
+    for (int32_t i = 0; i < session->entropy_ring_cap; ++i) {
+        if (session->entropy_snaps[i].valid && session->entropy_snaps[i].id == checkpoint_id) {
+            snap = &session->entropy_snaps[i];
+            break;
+        }
+    }
+    if (!snap) {
+        lfg_set_last_error(LFG_ERROR_INVALID_ARGUMENT,
+            "%s: checkpoint_id %d not found or expired", __func__, checkpoint_id);
+        return false;
+    }
+
+    // Cannot rewind forward
+    if (snap->n_past > session->n_past) {
+        lfg_set_last_error(LFG_ERROR_INVALID_ARGUMENT,
+            "%s: checkpoint n_past (%d) > current n_past (%d)", __func__, snap->n_past, session->n_past);
+        return false;
+    }
+
+    // Restore session state (truncate histories first, before KV replay fallback)
+    session->token_history.size = snap->token_count;
+    session->sampler_offsets.size = snap->token_count;
+    if (snap->sampler_count <= session->sampler_history.size) {
+        session->sampler_history.size = snap->sampler_count;
+    }
+    session->pending_sampler_accepts = 0;
+    session->generated_count = snap->generated_count;
+    session->reasoning_token_count = snap->reasoning_token_count;
+    session->n_past = snap->n_past;
+
+    // Truncate KV cache
+    lfg_memory_t mem = lfg_get_memory(session->ctx);
+    bool kv_ok = lfg_memory_seq_rm(mem, 0, snap->n_past, -1);
+    if (!kv_ok) {
+        // Fallback: full clear + replay token history up to snap point
+        lfg_memory_clear(mem, true);
+        session->n_past = 0;
+
+        if (snap->token_count > 0) {
+            int32_t n = (int32_t)snap->token_count;
+            if ((size_t)n > session->pos_buf_cap) {
+                session->pos_buf = (lfg_pos *)realloc(session->pos_buf, (size_t)n * sizeof(lfg_pos));
+                session->pos_buf_cap = (size_t)n;
+            }
+            for (int i = 0; i < n; ++i) session->pos_buf[i] = i;
+
+            lfg_batch batch = {};
+            batch.n_tokens = n;
+            batch.token = session->token_history.data;
+            batch.pos = session->pos_buf;
+            if (lfg_decode(session->ctx, batch) != 0) {
+                lfg_set_last_error(LFG_ERROR_INTERNAL, "%s: failed to replay KV cache", __func__);
+                return false;
+            }
+            session->n_past = n;
+        }
+    }
+
+    // Reset sampler from history
+    if (session->sampler) {
+        bool has_grammar = session->grammar_str && session->grammar_str[0] != '\0';
+        session_rebuild_sampler_from_history(session, has_grammar);
+    }
+
+    // Invalidate the used snap
+    snap->valid = false;
+
+    // Reset entropy ring (events are stale after rewind)
+    session->entropy_write_idx = 0;
+    session->entropy_read_idx = 0;
+    session->entropy_tokens_since = session->entropy_cooldown; // allow event on next uncertain token
+
+    return true;
+}
+
+LFG_API float lfg_session_get_last_entropy(lfg_session * session) {
+    if (!session) return -1.0f;
+    return session->entropy_last_norm;
+}
+
+// ---------------------------------------------------------------------------
+// Embedding API
+// ---------------------------------------------------------------------------
+
+LFG_API int32_t lfg_session_embed(lfg_session * session,
+                                   const char * text, int32_t text_len,
+                                   float * out, int32_t out_cap) {
+    if (!session || !text || text_len <= 0 || !out || out_cap <= 0) return 0;
+
+    if (!session_ensure_embed_ctx(session)) {
+        lfg_set_last_error(LFG_ERROR_INTERNAL,
+            "%s: failed to create embedding context", __func__);
+        return 0;
+    }
+
+    int32_t n_embd = lfg_model_n_embd(session->model);
+    if (out_cap < n_embd) return 0;
+
+    const lfg_vocab *vocab = lfg_model_get_vocab(session->model);
+
+    // Tokenize
+    int32_t tok_cap = text_len + 16;
+    lfg_token *toks = (lfg_token *)malloc(tok_cap * sizeof(lfg_token));
+    int32_t n_tok = lfg_tokenize(vocab, text, text_len, toks, tok_cap, true, false);
+    if (n_tok < 0) {
+        tok_cap = -n_tok;
+        toks = (lfg_token *)realloc(toks, tok_cap * sizeof(lfg_token));
+        n_tok = lfg_tokenize(vocab, text, text_len, toks, tok_cap, true, false);
+    }
+    if (n_tok <= 0) { free(toks); return 0; }
+
+    // Truncate to context capacity
+    int32_t ctx_cap = (int32_t)lfg_n_ctx(session->tool_ctx);
+    lfg_token *tok_ptr = toks;
+    if (n_tok > ctx_cap) {
+        tok_ptr = toks + (n_tok - ctx_cap);
+        n_tok = ctx_cap;
+    }
+
+    // Forward pass
+    lfg_memory_clear(lfg_get_memory(session->tool_ctx), true);
+    lfg_batch batch = lfg_batch_get_one(tok_ptr, n_tok);
+    if (lfg_decode(session->tool_ctx, batch) != 0) { free(toks); return 0; }
+
+    float *embd_ptr = lfg_get_embeddings_seq(session->tool_ctx, 0);
+    if (!embd_ptr) embd_ptr = lfg_get_embeddings_ith(session->tool_ctx, -1);
+    if (!embd_ptr) { free(toks); return 0; }
+
+    // Copy + L2 normalize
+    std::memcpy(out, embd_ptr, n_embd * sizeof(float));
+    l2_normalize(out, n_embd);
+
+    free(toks);
+    return n_embd;
 }
 
 // ---------------------------------------------------------------------------

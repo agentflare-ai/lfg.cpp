@@ -737,6 +737,12 @@ fn addExecutables(
     addCommonExeLinks(bench_tool_ranking, target, framework_path, private_framework_path, sysroot);
     b.installArtifact(bench_tool_ranking);
 
+    const eval_entropy = addExe(b, target, optimize, "eval-entropy-retrieval", &[_][]const u8{"src/eval/eval_entropy_retrieval.cpp"}, spdlog_include, cxx_flags, framework_path, private_framework_path);
+    eval_entropy.linkLibrary(lfg_core);
+    eval_entropy.linkLibrary(ggml);
+    addCommonExeLinks(eval_entropy, target, framework_path, private_framework_path, sysroot);
+    b.installArtifact(eval_entropy);
+
     const llama_struct = addExe(b, target, optimize, "llama-structured-compare", &[_][]const u8{
         "src/eval/llama_structured_compare.cpp",
         "src/inference/json_schema_to_grammar.cpp",
@@ -841,6 +847,7 @@ fn addTests(
         "test_checkpoint_state",
         "test_max_tokens_reasoning",
         "test_tool_ranker",
+        "test_entropy_monitor",
     };
 
     const test_files = [_][]const u8{
@@ -872,6 +879,7 @@ fn addTests(
         "src/tests/test_checkpoint_state.cpp",
         "src/tests/test_max_tokens_reasoning.cpp",
         "src/tests/test_tool_ranker.cpp",
+        "src/tests/test_entropy_monitor.cpp",
     };
 
     var test_step = b.step("test", "Build and run tests");

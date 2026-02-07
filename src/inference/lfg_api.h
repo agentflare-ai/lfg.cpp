@@ -122,6 +122,62 @@ LFG_API int32_t lfg_session_register_tools(lfg_session * session,
 // Clear registered tools and free tool context.
 LFG_API void lfg_session_clear_tools(lfg_session * session);
 
+// --- Entropy Monitor API ---
+
+// Event read from the ring buffer via lfg_session_entropy_pop().
+typedef struct lfg_entropy_event {
+    float       entropy;        // Raw Shannon entropy: H = -sum p_i log(p_i)
+    float       normalized;     // entropy / log(n_vocab), range [0,1]
+    float       top_logprob;    // Log probability of the sampled token
+    lfg_token   token;          // The sampled token
+    int32_t     n_past;         // Token position when event fired
+    int32_t     checkpoint_id;  // Opaque ID for lfg_session_rewind()
+    int32_t     n_embd;         // Embedding dimension (for embd_out sizing)
+} lfg_entropy_event;
+
+typedef struct lfg_entropy_monitor_config {
+    float    threshold;          // Normalized entropy threshold (0,1]. 0 = disabled.
+    int32_t  cooldown_tokens;    // Min tokens between events.
+    int32_t  ring_size;          // Ring buffer slots. 0 = default (4).
+} lfg_entropy_monitor_config;
+
+LFG_API lfg_entropy_monitor_config lfg_entropy_monitor_default_config(void);
+
+// Configure. Allocates ring buffer + embedding context. Pass NULL to disable.
+LFG_API bool lfg_session_configure_entropy_monitor(
+    lfg_session * session, const lfg_entropy_monitor_config * config);
+
+// Pop next pending event. Copies embedding into embd_out (must be >= n_embd floats).
+// Pass NULL for embd_out to skip embedding copy. Returns false if no events pending.
+LFG_API bool lfg_session_entropy_pop(lfg_session * session,
+                                      lfg_entropy_event * event_out,
+                                      float * embd_out, int32_t embd_cap);
+
+// Number of pending (unread) entropy events.
+LFG_API int32_t lfg_session_entropy_pending(lfg_session * session);
+
+// Discard all pending entropy events without reading them. O(1).
+LFG_API void lfg_session_entropy_flush(lfg_session * session);
+
+// Pointer to atomic write counter. Observer can poll or use platform wait.
+// Incremented each time an event is written to the ring.
+LFG_API volatile int32_t * lfg_session_entropy_counter(lfg_session * session);
+
+// Rewind to entropy checkpoint. Truncates KV cache, resets sampler. Zero-alloc.
+LFG_API bool lfg_session_rewind(lfg_session * session, int32_t checkpoint_id);
+
+// Normalized entropy from last sample(). -1 if no sample performed.
+LFG_API float lfg_session_get_last_entropy(lfg_session * session);
+
+// --- Embedding API ---
+
+// Compute a mean-pooled, L2-normalized embedding for the given text.
+// Writes n_embd floats into out. Returns n_embd on success, 0 on failure.
+// Allocates an embedding context on first call (reused across calls).
+LFG_API int32_t lfg_session_embed(lfg_session * session,
+                                   const char * text, int32_t text_len,
+                                   float * out, int32_t out_cap);
+
 // --- Model Loader C API (replaces liquid::ModelLoader) ---
 
 typedef struct lfg_model_load_config {

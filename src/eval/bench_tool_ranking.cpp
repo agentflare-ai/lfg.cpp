@@ -190,10 +190,70 @@ static BenchResult run_ranked(lfg_model *model, const lfg_vocab *vocab,
     return r;
 }
 
+// ---------------------------------------------------------------------------
+// Entropy monitor benchmarks
+// ---------------------------------------------------------------------------
+
+static BenchResult run_entropy(lfg_model *model, const lfg_vocab *vocab,
+                                const std::string &prompt, int gen_tokens,
+                                float threshold, int32_t cooldown) {
+    BenchResult r = {};
+    lfg_session_config sc = lfg_session_default_config();
+    sc.n_ctx = 2048; sc.sampling.temp = 0.0f;
+    auto *session = lfg_session_create(model, &sc);
+
+    lfg_entropy_monitor_config ecfg = lfg_entropy_monitor_default_config();
+    ecfg.threshold = threshold;
+    ecfg.cooldown_tokens = cooldown;
+    ecfg.ring_size = 8;
+
+    auto t_reg0 = Clock::now();
+    lfg_session_configure_entropy_monitor(session, &ecfg);
+    auto t_reg1 = Clock::now();
+    r.register_ms = std::chrono::duration<double, std::milli>(t_reg1 - t_reg0).count();
+
+    auto prompt_toks = tokenize(vocab, prompt, true);
+    r.prompt_tokens = (int)prompt_toks.size();
+
+    lfg_session_ingest_tokens(session, prompt_toks.data(), prompt_toks.size(), true);
+
+    auto t0 = Clock::now();
+    lfg_session_decode(session);
+    lfg_token tok = lfg_session_sample(session);
+    auto t1 = Clock::now();
+    r.ttft_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+
+    // Generate
+    int events_fired = 0;
+    auto tg0 = Clock::now();
+    for (int i = 0; i < gen_tokens; i++) {
+        if (lfg_vocab_is_eog(vocab, tok)) break;
+        lfg_session_ingest_tokens(session, &tok, 1, false);
+        lfg_session_decode(session);
+        tok = lfg_session_sample(session);
+        r.n_generated++;
+    }
+    auto tg1 = Clock::now();
+    r.gen_total_ms = std::chrono::duration<double, std::milli>(tg1 - tg0).count();
+    r.gen_per_tok_ms = r.n_generated > 0 ? r.gen_total_ms / r.n_generated : 0;
+
+    events_fired = lfg_session_entropy_pending(session);
+    r.tool_tokens = events_fired; // reuse field to report events fired
+
+    lfg_session_free(session);
+    return r;
+}
+
 static void print_result(const char *label, const BenchResult &r) {
     printf("  %-38s | reg %7.1f ms | TTFT %7.1f ms | gen %6.1f ms/tok (%d tok) | ctx: %d prompt + %d tools\n",
            label, r.register_ms, r.ttft_ms, r.gen_per_tok_ms, r.n_generated,
            r.prompt_tokens, r.tool_tokens);
+}
+
+static void print_entropy_result(const char *label, const BenchResult &r) {
+    printf("  %-38s | cfg %7.1f ms | TTFT %7.1f ms | gen %6.1f ms/tok (%d tok) | %d events\n",
+           label, r.register_ms, r.ttft_ms, r.gen_per_tok_ms, r.n_generated,
+           r.tool_tokens);
 }
 
 int main() {
@@ -256,6 +316,35 @@ int main() {
                r0.gen_per_tok_ms > 0 ? 100.0 * (r3.gen_per_tok_ms - r0.gen_per_tok_ms) / r0.gen_per_tok_ms : 0,
                r0.gen_per_tok_ms > 0 ? 100.0 * (r4.gen_per_tok_ms - r0.gen_per_tok_ms) / r0.gen_per_tok_ms : 0,
                r0.gen_per_tok_ms > 0 ? 100.0 * (r5.gen_per_tok_ms - r0.gen_per_tok_ms) / r0.gen_per_tok_ms : 0);
+    }
+
+    // -------------------------------------------------------------------------
+    // Entropy Monitor Benchmark
+    // -------------------------------------------------------------------------
+    printf("\n\nEntropy Monitor Benchmark — 1.2B model, CPU, n_ctx=2048, gen=%d tokens\n", GEN);
+    printf("=%.120s\n", "============================================================================================================================");
+
+    for (int p = 0; p < 3; p++) {
+        std::string prompt = prompts[p];
+        printf("\nQuery: \"%s\"\n", labels[p]);
+        printf("--%.120s\n", "----------------------------------------------------------------------------------------------------------------------------");
+
+        auto e0 = run_no_tools(model, vocab, prompt, GEN);
+        print_result("(A) No entropy (baseline)", e0);
+
+        auto e1 = run_entropy(model, vocab, prompt, GEN, 0.7f, 16);
+        print_entropy_result("(B) Entropy t=0.7 cd=16 (default)", e1);
+
+        auto e2 = run_entropy(model, vocab, prompt, GEN, 0.3f, 4);
+        print_entropy_result("(C) Entropy t=0.3 cd=4 (aggressive)", e2);
+
+        auto e3 = run_entropy(model, vocab, prompt, GEN, 0.01f, 1);
+        print_entropy_result("(D) Entropy t=0.01 cd=1 (worst case)", e3);
+
+        printf("\n  Gen overhead vs baseline:   B=%+.1f%%  C=%+.1f%%  D=%+.1f%%\n",
+               e0.gen_per_tok_ms > 0 ? 100.0 * (e1.gen_per_tok_ms - e0.gen_per_tok_ms) / e0.gen_per_tok_ms : 0,
+               e0.gen_per_tok_ms > 0 ? 100.0 * (e2.gen_per_tok_ms - e0.gen_per_tok_ms) / e0.gen_per_tok_ms : 0,
+               e0.gen_per_tok_ms > 0 ? 100.0 * (e3.gen_per_tok_ms - e0.gen_per_tok_ms) / e0.gen_per_tok_ms : 0);
     }
 
     lfg_model_free(model);
