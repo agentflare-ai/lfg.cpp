@@ -171,6 +171,45 @@ LFG_API bool lfg_session_rewind(lfg_session * session, int32_t checkpoint_id);
 // Normalized entropy from last sample(). -1 if no sample performed.
 LFG_API float lfg_session_get_last_entropy(lfg_session * session);
 
+// --- Confidence Monitor API (inverse entropy — sustained low-entropy span detection) ---
+
+// Event emitted when a sustained low-entropy span ends.
+typedef struct lfg_confidence_event {
+    float       mean_entropy;    // Average normalized entropy over the span
+    float       min_entropy;     // Minimum normalized entropy in the span
+    int32_t     span_length;     // Number of consecutive low-entropy tokens
+    int32_t     start_pos;       // n_past at span start
+    int32_t     end_pos;         // n_past at span end
+    int32_t     n_embd;          // Embedding dimension (for embd_out sizing)
+} lfg_confidence_event;
+
+typedef struct lfg_confidence_monitor_config {
+    float    threshold;          // Normalized entropy ceiling (0,1]. Tokens below this are "confident".
+    int32_t  min_span;           // Minimum consecutive tokens to emit an event. 0 = default (5).
+    int32_t  ring_size;          // Ring buffer slots. 0 = default (4).
+} lfg_confidence_monitor_config;
+
+// Called when a sustained low-entropy span ends. Receives event + mean-pooled embedding.
+// Informational only — no rewind needed for store.
+typedef void (*lfg_generate_confidence_cb)(
+    const lfg_confidence_event * event, const float * embedding, void * user_data);
+
+LFG_API lfg_confidence_monitor_config lfg_confidence_monitor_default_config(void);
+
+// Configure. Allocates ring buffer + embedding context. Pass NULL to disable.
+// Returns n_embd (> 0) on success, 0 on failure or disable.
+LFG_API int32_t lfg_session_configure_confidence_monitor(
+    lfg_session * session, const lfg_confidence_monitor_config * config);
+
+// Pop next pending event. Copies embedding into embd_out. Returns false if none pending.
+LFG_API bool lfg_session_confidence_pop(lfg_session * session,
+                                         lfg_confidence_event * event_out,
+                                         float * embd_out, int32_t embd_cap);
+
+LFG_API int32_t lfg_session_confidence_pending(lfg_session * session);
+LFG_API void    lfg_session_confidence_flush(lfg_session * session);
+LFG_API volatile int32_t * lfg_session_confidence_counter(lfg_session * session);
+
 // --- Embedding API ---
 
 // Compute a mean-pooled, L2-normalized embedding for the given text.
@@ -200,10 +239,12 @@ typedef struct lfg_generate_config {
     int32_t  max_tokens;          // Hard token limit. 0 = use session config.
 
     // Callbacks (nullable — NULL means no callback)
-    lfg_generate_token_cb    token_cb;
-    void                   * token_cb_data;
-    lfg_generate_entropy_cb  entropy_cb;
-    void                   * entropy_cb_data;
+    lfg_generate_token_cb      token_cb;
+    void                     * token_cb_data;
+    lfg_generate_entropy_cb    entropy_cb;
+    void                     * entropy_cb_data;
+    lfg_generate_confidence_cb confidence_cb;
+    void                     * confidence_cb_data;
 } lfg_generate_config;
 
 // Why generation stopped.
@@ -214,9 +255,10 @@ typedef enum {
 } lfg_stop_reason;
 
 typedef struct lfg_generate_result {
-    int32_t          n_tokens;       // Tokens generated
-    int32_t          n_retrievals;   // Number of entropy-triggered rewind+inject cycles
-    lfg_stop_reason  stop_reason;    // Why generation stopped
+    int32_t          n_tokens;            // Tokens generated
+    int32_t          n_retrievals;        // Number of entropy-triggered rewind+inject cycles
+    int32_t          n_confidence_spans;  // Number of confidence events fired during generation
+    lfg_stop_reason  stop_reason;         // Why generation stopped
 } lfg_generate_result;
 
 // Default generate config (max_tokens=0, all callbacks NULL).

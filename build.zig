@@ -743,6 +743,12 @@ fn addExecutables(
     addCommonExeLinks(eval_entropy, target, framework_path, private_framework_path, sysroot);
     b.installArtifact(eval_entropy);
 
+    const bench_confidence = addExe(b, target, optimize, "bench-confidence-overhead", &[_][]const u8{"src/eval/bench_confidence_overhead.cpp"}, spdlog_include, cxx_flags, framework_path, private_framework_path);
+    bench_confidence.linkLibrary(lfg_core);
+    bench_confidence.linkLibrary(ggml);
+    addCommonExeLinks(bench_confidence, target, framework_path, private_framework_path, sysroot);
+    b.installArtifact(bench_confidence);
+
     const llama_struct = addExe(b, target, optimize, "llama-structured-compare", &[_][]const u8{
         "src/eval/llama_structured_compare.cpp",
         "src/inference/json_schema_to_grammar.cpp",
@@ -848,6 +854,7 @@ fn addTests(
         "test_max_tokens_reasoning",
         "test_tool_ranker",
         "test_entropy_monitor",
+        "test_confidence_monitor",
         "test_generate_loop",
     };
 
@@ -881,6 +888,7 @@ fn addTests(
         "src/tests/test_max_tokens_reasoning.cpp",
         "src/tests/test_tool_ranker.cpp",
         "src/tests/test_entropy_monitor.cpp",
+        "src/tests/test_confidence_monitor.cpp",
         "src/tests/test_generate_loop.cpp",
     };
 

@@ -94,6 +94,15 @@ struct lfg_entropy_snap {
 };
 
 // ---------------------------------------------------------------------------
+// Internal confidence monitor types (pre-allocated at configure time)
+// ---------------------------------------------------------------------------
+
+struct lfg_confidence_ring_slot {
+    lfg_confidence_event event;
+    float               *embedding;  // Points into confidence_embd_pool
+};
+
+// ---------------------------------------------------------------------------
 // Opaque session struct (flat C, pre-allocated buffers)
 // ---------------------------------------------------------------------------
 
@@ -196,6 +205,25 @@ struct lfg_session {
     int32_t                entropy_read_idx;
     int32_t                entropy_next_id;
     int32_t                entropy_n_embd;
+
+    // Confidence monitor config (inverse entropy — sustained low-entropy span detection)
+    float                confidence_threshold;
+    int32_t              confidence_min_span;
+    bool                 confidence_active;
+
+    // Run tracker (zero-alloc hot path state)
+    int32_t              confidence_run_count;
+    float                confidence_run_entropy_sum;
+    float                confidence_run_min_entropy;
+    int32_t              confidence_run_start_pos;
+
+    // SPSC ring buffer (pre-allocated at configure time)
+    lfg_confidence_ring_slot *confidence_slots;
+    float                    *confidence_embd_pool;
+    int32_t                   confidence_ring_cap;
+    volatile int32_t          confidence_write_idx;
+    int32_t                   confidence_read_idx;
+    int32_t                   confidence_n_embd;
 };
 
 // ---------------------------------------------------------------------------
@@ -709,6 +737,21 @@ LFG_API lfg_session * lfg_session_create(lfg_model * model, const lfg_session_co
     s->entropy_next_id = 0;
     s->entropy_n_embd = 0;
 
+    // Confidence monitor (all nullptr/zero — allocated in configure_confidence_monitor)
+    s->confidence_threshold = 0.0f;
+    s->confidence_min_span = 5;
+    s->confidence_active = false;
+    s->confidence_run_count = 0;
+    s->confidence_run_entropy_sum = 0.0f;
+    s->confidence_run_min_entropy = 1.0f;
+    s->confidence_run_start_pos = 0;
+    s->confidence_slots = nullptr;
+    s->confidence_embd_pool = nullptr;
+    s->confidence_ring_cap = 0;
+    s->confidence_write_idx = 0;
+    s->confidence_read_idx = 0;
+    s->confidence_n_embd = 0;
+
     session_rebuild_sampler(s);
 
     return s;
@@ -746,6 +789,13 @@ LFG_API void lfg_session_free(lfg_session * session) {
     free(session->entropy_slots);
     free(session->entropy_snaps);
     free(session->entropy_embd_pool);
+
+    // Confidence monitor
+    session->confidence_write_idx = 0;
+    session->confidence_read_idx = 0;
+
+    free(session->confidence_slots);
+    free(session->confidence_embd_pool);
 
     free(session);
 }
@@ -787,6 +837,15 @@ LFG_API void lfg_session_reset(lfg_session * session) {
         for (int32_t i = 0; i < session->entropy_ring_cap; ++i) {
             session->entropy_snaps[i].valid = false;
         }
+    }
+
+    // Confidence monitor reset
+    if (session->confidence_active) {
+        session->confidence_write_idx = 0;
+        session->confidence_read_idx = 0;
+        session->confidence_run_count = 0;
+        session->confidence_run_entropy_sum = 0.0f;
+        session->confidence_run_min_entropy = 1.0f;
     }
 }
 
@@ -1105,8 +1164,8 @@ LFG_API lfg_token lfg_session_sample(lfg_session * session) {
     session_record_sampler_token(session, token, true);
     session->generated_count++;
 
-    // Entropy monitoring — zero alloc, no callbacks
-    if (session->entropy_active) {
+    // Entropy + confidence monitoring — zero alloc, shared softmax computation
+    if (session->entropy_active || session->confidence_active) {
         float *logits = lfg_get_logits(session->ctx);
         int n_vocab = lfg_vocab_n_tokens(lfg_model_get_vocab(session->model));
 
@@ -1125,43 +1184,86 @@ LFG_API lfg_token lfg_session_sample(lfg_session * session) {
         float norm = max_ent > 0 ? entropy / max_ent : 0;
         session->entropy_last = entropy;
         session->entropy_last_norm = norm;
-        session->entropy_tokens_since++;
 
-        // Threshold + cooldown gate
-        if (norm >= session->entropy_threshold &&
-            session->entropy_tokens_since >= session->entropy_cooldown) {
-            session->entropy_tokens_since = 0;
+        // --- Entropy monitor (high entropy → retrieve) ---
+        if (session->entropy_active) {
+            session->entropy_tokens_since++;
 
-            int32_t wi = session->entropy_write_idx;
-            int slot = wi % session->entropy_ring_cap;
+            // Threshold + cooldown gate
+            if (norm >= session->entropy_threshold &&
+                session->entropy_tokens_since >= session->entropy_cooldown) {
+                session->entropy_tokens_since = 0;
 
-            // Save snap (zero alloc — write into pre-alloc'd array)
-            lfg_entropy_snap *snap = &session->entropy_snaps[slot];
-            snap->n_past = session->n_past;
-            snap->token_count = session->token_history.size;
-            snap->sampler_count = session->sampler_history.size;
-            snap->generated_count = session->generated_count;
-            snap->reasoning_token_count = session->reasoning_token_count;
-            snap->id = session->entropy_next_id++;
-            snap->valid = true;
+                int32_t wi = session->entropy_write_idx;
+                int slot = wi % session->entropy_ring_cap;
 
-            // Compute embedding into slot's pre-alloc'd buffer
-            float *slot_embd = session->entropy_embd_pool + (slot * session->entropy_n_embd);
-            bool got_embd = compute_query_embedding(session, slot_embd);
+                // Save snap (zero alloc — write into pre-alloc'd array)
+                lfg_entropy_snap *snap = &session->entropy_snaps[slot];
+                snap->n_past = session->n_past;
+                snap->token_count = session->token_history.size;
+                snap->sampler_count = session->sampler_history.size;
+                snap->generated_count = session->generated_count;
+                snap->reasoning_token_count = session->reasoning_token_count;
+                snap->id = session->entropy_next_id++;
+                snap->valid = true;
 
-            // Write event into ring slot (zero alloc)
-            lfg_entropy_ring_slot *rs = &session->entropy_slots[slot];
-            rs->event.entropy       = entropy;
-            rs->event.normalized    = norm;
-            rs->event.top_logprob   = token_prob > 0 ? logf(token_prob) : -INFINITY;
-            rs->event.token         = token;
-            rs->event.n_past        = session->n_past;
-            rs->event.checkpoint_id = snap->id;
-            rs->event.n_embd        = got_embd ? session->entropy_n_embd : 0;
-            rs->embedding           = got_embd ? slot_embd : nullptr;
+                // Compute embedding into slot's pre-alloc'd buffer
+                float *slot_embd = session->entropy_embd_pool + (slot * session->entropy_n_embd);
+                bool got_embd = compute_query_embedding(session, slot_embd);
 
-            // Publish — atomic store (release semantics)
-            __atomic_store_n(&session->entropy_write_idx, wi + 1, __ATOMIC_RELEASE);
+                // Write event into ring slot (zero alloc)
+                lfg_entropy_ring_slot *rs = &session->entropy_slots[slot];
+                rs->event.entropy       = entropy;
+                rs->event.normalized    = norm;
+                rs->event.top_logprob   = token_prob > 0 ? logf(token_prob) : -INFINITY;
+                rs->event.token         = token;
+                rs->event.n_past        = session->n_past;
+                rs->event.checkpoint_id = snap->id;
+                rs->event.n_embd        = got_embd ? session->entropy_n_embd : 0;
+                rs->embedding           = got_embd ? slot_embd : nullptr;
+
+                // Publish — atomic store (release semantics)
+                __atomic_store_n(&session->entropy_write_idx, wi + 1, __ATOMIC_RELEASE);
+            }
+        }
+
+        // --- Confidence monitor (low entropy → store) ---
+        // Hot path is O(1): only accumulate run stats + write event metadata.
+        // Embedding is computed lazily in pop(), not here.
+        if (session->confidence_active) {
+            if (norm <= session->confidence_threshold) {
+                // Extend run
+                if (session->confidence_run_count == 0) {
+                    session->confidence_run_start_pos = session->n_past;
+                    session->confidence_run_min_entropy = norm;
+                }
+                session->confidence_run_count++;
+                session->confidence_run_entropy_sum += norm;
+                if (norm < session->confidence_run_min_entropy) {
+                    session->confidence_run_min_entropy = norm;
+                }
+            } else {
+                // Run broken — emit event if long enough
+                if (session->confidence_run_count >= session->confidence_min_span) {
+                    int32_t wi = session->confidence_write_idx;
+                    int slot = wi % session->confidence_ring_cap;
+
+                    lfg_confidence_ring_slot *rs = &session->confidence_slots[slot];
+                    rs->event.mean_entropy = session->confidence_run_entropy_sum / session->confidence_run_count;
+                    rs->event.min_entropy  = session->confidence_run_min_entropy;
+                    rs->event.span_length  = session->confidence_run_count;
+                    rs->event.start_pos    = session->confidence_run_start_pos;
+                    rs->event.end_pos      = session->n_past;
+                    rs->event.n_embd       = session->confidence_n_embd;
+                    rs->embedding          = nullptr;  // Lazy — computed in pop()
+
+                    __atomic_store_n(&session->confidence_write_idx, wi + 1, __ATOMIC_RELEASE);
+                }
+                // Reset run
+                session->confidence_run_count = 0;
+                session->confidence_run_entropy_sum = 0.0f;
+                session->confidence_run_min_entropy = 1.0f;
+            }
         }
     }
 
@@ -1653,8 +1755,8 @@ LFG_API void lfg_session_clear_tools(lfg_session * session) {
     session_free_tool_entries(session);
     session->tool_top_k = 0;
     session->tools_injected = false;
-    // Only free tool_ctx if entropy monitor isn't using it
-    if (session->tool_ctx && !session->entropy_active) {
+    // Only free tool_ctx if entropy/confidence monitor isn't using it
+    if (session->tool_ctx && !session->entropy_active && !session->confidence_active) {
         lfg_free(session->tool_ctx);
         session->tool_ctx = nullptr;
     }
@@ -1860,6 +1962,116 @@ LFG_API float lfg_session_get_last_entropy(lfg_session * session) {
 }
 
 // ---------------------------------------------------------------------------
+// Confidence Monitor API
+// ---------------------------------------------------------------------------
+
+LFG_API lfg_confidence_monitor_config lfg_confidence_monitor_default_config(void) {
+    lfg_confidence_monitor_config cfg{};
+    cfg.threshold = 0.3f;
+    cfg.min_span = 5;
+    cfg.ring_size = 4;
+    return cfg;
+}
+
+LFG_API int32_t lfg_session_configure_confidence_monitor(
+    lfg_session * session, const lfg_confidence_monitor_config * config) {
+    if (!session) return 0;
+
+    // Pass NULL to disable
+    if (!config) {
+        session->confidence_active = false;
+        return 0;
+    }
+
+    if (!session_ensure_embed_ctx(session)) {
+        lfg_set_last_error(LFG_ERROR_INTERNAL,
+            "%s: failed to create embedding context", __func__);
+        return 0;
+    }
+
+    int32_t cap = config->ring_size > 0 ? config->ring_size : 4;
+    int32_t min_span = config->min_span > 0 ? config->min_span : 5;
+    int32_t n_embd = lfg_model_n_embd(session->model);
+
+    // Free previous allocations
+    free(session->confidence_slots);
+    free(session->confidence_embd_pool);
+
+    // One-time allocation of ring buffer + embedding pool
+    session->confidence_slots     = (lfg_confidence_ring_slot *)calloc(cap, sizeof(lfg_confidence_ring_slot));
+    session->confidence_embd_pool = (float *)calloc(cap * n_embd, sizeof(float));
+
+    // Wire each slot's embedding pointer to pool
+    for (int32_t i = 0; i < cap; ++i) {
+        session->confidence_slots[i].embedding = session->confidence_embd_pool + (i * n_embd);
+    }
+
+    session->confidence_ring_cap     = cap;
+    session->confidence_n_embd       = n_embd;
+    session->confidence_write_idx    = 0;
+    session->confidence_read_idx     = 0;
+    session->confidence_threshold    = config->threshold;
+    session->confidence_min_span     = min_span;
+    session->confidence_run_count    = 0;
+    session->confidence_run_entropy_sum = 0.0f;
+    session->confidence_run_min_entropy = 1.0f;
+    session->confidence_run_start_pos   = 0;
+    session->confidence_active       = true;
+
+    return n_embd;
+}
+
+LFG_API bool lfg_session_confidence_pop(lfg_session * session,
+                                         lfg_confidence_event * event_out,
+                                         float * embd_out, int32_t embd_cap) {
+    if (!session || !session->confidence_slots) return false;
+
+    int32_t wi = __atomic_load_n(&session->confidence_write_idx, __ATOMIC_ACQUIRE);
+    if (session->confidence_read_idx >= wi) return false;
+
+    int slot = session->confidence_read_idx % session->confidence_ring_cap;
+    lfg_confidence_ring_slot *rs = &session->confidence_slots[slot];
+
+    // Lazy embedding: compute on pop if caller wants it and we haven't yet
+    if (embd_out && embd_cap >= session->confidence_n_embd && !rs->embedding) {
+        float *slot_embd = session->confidence_embd_pool + (slot * session->confidence_n_embd);
+        bool got = compute_query_embedding(session, slot_embd);
+        if (got) {
+            rs->embedding = slot_embd;
+        } else {
+            rs->event.n_embd = 0;
+        }
+    }
+
+    if (event_out) *event_out = rs->event;
+
+    if (embd_out && rs->embedding && rs->event.n_embd > 0) {
+        int32_t n = rs->event.n_embd < embd_cap ? rs->event.n_embd : embd_cap;
+        std::memcpy(embd_out, rs->embedding, n * sizeof(float));
+    }
+
+    session->confidence_read_idx++;
+    return true;
+}
+
+LFG_API int32_t lfg_session_confidence_pending(lfg_session * session) {
+    if (!session || !session->confidence_slots) return 0;
+    int32_t wi = __atomic_load_n(&session->confidence_write_idx, __ATOMIC_ACQUIRE);
+    int32_t pending = wi - session->confidence_read_idx;
+    return pending > 0 ? pending : 0;
+}
+
+LFG_API void lfg_session_confidence_flush(lfg_session * session) {
+    if (!session) return;
+    session->confidence_read_idx = __atomic_load_n(&session->confidence_write_idx, __ATOMIC_ACQUIRE);
+}
+
+LFG_API volatile int32_t * lfg_session_confidence_counter(lfg_session * session) {
+    if (!session) return nullptr;
+    return &session->confidence_write_idx;
+}
+
+// ---------------------------------------------------------------------------
 // Embedding API
 // ---------------------------------------------------------------------------
 
@@ -1926,6 +2138,8 @@ LFG_API lfg_generate_config lfg_generate_default_config(void) {
     cfg.token_cb_data = nullptr;
     cfg.entropy_cb = nullptr;
     cfg.entropy_cb_data = nullptr;
+    cfg.confidence_cb = nullptr;
+    cfg.confidence_cb_data = nullptr;
     return cfg;
 }
 
@@ -1947,6 +2161,12 @@ LFG_API lfg_generate_result lfg_session_generate(
     float *embd_buf = nullptr;
     if (config.entropy_cb && session->entropy_active && session->entropy_n_embd > 0) {
         embd_buf = (float *)alloca(session->entropy_n_embd * sizeof(float));
+    }
+
+    // Pre-allocate embedding buffer for confidence callbacks
+    float *conf_embd_buf = nullptr;
+    if (config.confidence_cb && session->confidence_active && session->confidence_n_embd > 0) {
+        conf_embd_buf = (float *)alloca(session->confidence_n_embd * sizeof(float));
     }
 
     for (int32_t i = 0; i < max_tokens; ++i) {
@@ -1997,6 +2217,16 @@ LFG_API lfg_generate_result lfg_session_generate(
             lfg_session_entropy_flush(session);
         }
 
+        // Confidence callback — informational, no rewind
+        if (config.confidence_cb && session->confidence_active) {
+            lfg_confidence_event cev;
+            while (lfg_session_confidence_pop(session, &cev, conf_embd_buf, session->confidence_n_embd)) {
+                const float *cembd_ptr = cev.n_embd > 0 ? conf_embd_buf : nullptr;
+                config.confidence_cb(&cev, cembd_ptr, config.confidence_cb_data);
+                result.n_confidence_spans++;
+            }
+        }
+
         result.n_tokens = i + 1;
 
         // Token callback (for streaming)
@@ -2016,6 +2246,38 @@ LFG_API lfg_generate_result lfg_session_generate(
 
     if (!stopped) {
         result.stop_reason = LFG_STOP_MAX_TOKENS;
+    }
+
+    // Post-loop: flush any in-progress confidence run as a final event
+    if (session->confidence_active &&
+        session->confidence_run_count >= session->confidence_min_span) {
+        int32_t wi = session->confidence_write_idx;
+        int slot = wi % session->confidence_ring_cap;
+
+        lfg_confidence_ring_slot *rs = &session->confidence_slots[slot];
+        rs->event.mean_entropy = session->confidence_run_entropy_sum / session->confidence_run_count;
+        rs->event.min_entropy  = session->confidence_run_min_entropy;
+        rs->event.span_length  = session->confidence_run_count;
+        rs->event.start_pos    = session->confidence_run_start_pos;
+        rs->event.end_pos      = session->n_past;
+        rs->event.n_embd       = session->confidence_n_embd;
+        rs->embedding          = nullptr;  // Lazy — computed in pop()
+
+        __atomic_store_n(&session->confidence_write_idx, wi + 1, __ATOMIC_RELEASE);
+
+        session->confidence_run_count = 0;
+        session->confidence_run_entropy_sum = 0.0f;
+        session->confidence_run_min_entropy = 1.0f;
+    }
+
+    // Drain any remaining confidence events through the callback
+    if (config.confidence_cb && session->confidence_active) {
+        lfg_confidence_event cev;
+        while (lfg_session_confidence_pop(session, &cev, conf_embd_buf, session->confidence_n_embd)) {
+            const float *cembd_ptr = cev.n_embd > 0 ? conf_embd_buf : nullptr;
+            config.confidence_cb(&cev, cembd_ptr, config.confidence_cb_data);
+            result.n_confidence_spans++;
+        }
     }
 
     return result;

@@ -620,3 +620,189 @@ TEST_CASE("Integration: Embed API produces valid embeddings") {
 
     lfg_session_free(session);
 }
+
+// ---------------------------------------------------------------------------
+// Integration: Retrieve + Store — entropy retrieves, confidence stores
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Integration: Confidence store collects spans during retrieval generation") {
+    lfg_model *model = get_1_2b();
+    if (!model) { MESSAGE("Skipping: 1.2B model not found"); return; }
+
+    const lfg_vocab *vocab = lfg_model_get_vocab(model);
+    int32_t n_embd = lfg_model_n_embd(model);
+
+    // Seed KB for retrieval
+    const char *facts[] = {
+        "The Eiffel Tower is 330 meters tall and was completed in 1889 for the World's Fair in Paris, France.",
+        "The speed of light in vacuum is exactly 299,792,458 meters per second.",
+        "Mount Everest has an elevation of 8,849 meters above sea level, located in the Himalayas.",
+    };
+    constexpr int N_FACTS = 3;
+
+    // Unrelated topic — for verifying stored embeddings have semantic signal
+    const char *unrelated_text = "The recipe for chocolate cake requires flour, sugar, cocoa powder, and eggs.";
+
+    lfg_session_config config = lfg_session_default_config();
+    config.n_ctx = 2048;
+    config.sampling.temp = 0.0f;
+    lfg_session *session = lfg_session_create(model, &config);
+    REQUIRE(session != nullptr);
+
+    // Build seed KB
+    auto kb = build_kb(session, facts, N_FACTS, n_embd);
+
+    // Compute unrelated embedding for later comparison
+    std::vector<float> unrelated_embd(n_embd);
+    int32_t got_unrelated = lfg_session_embed(session, unrelated_text, (int32_t)std::strlen(unrelated_text),
+                                                unrelated_embd.data(), n_embd);
+    REQUIRE(got_unrelated == n_embd);
+
+    // Compute prompt topic embedding
+    const char *prompt_topic = "Eiffel Tower Paris France height";
+    std::vector<float> topic_embd(n_embd);
+    int32_t got_topic = lfg_session_embed(session, prompt_topic, (int32_t)std::strlen(prompt_topic),
+                                            topic_embd.data(), n_embd);
+    REQUIRE(got_topic == n_embd);
+
+    // Configure entropy monitor (retrieve)
+    lfg_entropy_monitor_config ecfg = lfg_entropy_monitor_default_config();
+    ecfg.threshold = 0.05f;
+    ecfg.cooldown_tokens = 16;
+    ecfg.ring_size = 4;
+    REQUIRE(lfg_session_configure_entropy_monitor(session, &ecfg) > 0);
+
+    // Configure confidence monitor (store)
+    lfg_confidence_monitor_config ccfg = lfg_confidence_monitor_default_config();
+    ccfg.threshold = 0.5f;   // Moderate — capture reasonably confident spans
+    ccfg.min_span = 3;
+    ccfg.ring_size = 8;
+    REQUIRE(lfg_session_configure_confidence_monitor(session, &ccfg) > 0);
+
+    // Accumulate stored spans via confidence callback
+    struct store_entry {
+        lfg_confidence_event event;
+        std::vector<float>   embedding;
+    };
+
+    struct cb_state {
+        // Confidence store
+        std::vector<store_entry> stored;
+        int32_t n_embd;
+
+        // Entropy retrieval
+        const std::vector<kb_entry> *kb;
+        int retrievals;
+        int max_retrievals;
+    };
+
+    cb_state state;
+    state.n_embd = n_embd;
+    state.kb = &kb;
+    state.retrievals = 0;
+    state.max_retrievals = 2;
+
+    // Ingest prompt
+    std::string prompt = "Tell me about the Eiffel Tower and how tall it is.\n";
+    auto toks = tokenize(vocab, prompt, true);
+    lfg_session_ingest_tokens(session, toks.data(), toks.size(), true);
+
+    // Generate with both callbacks via the generate loop
+    lfg_generate_config gc = lfg_generate_default_config();
+    gc.max_tokens = 80;
+
+    // Entropy callback — retrieve from KB
+    gc.entropy_cb = [](const lfg_entropy_event *ev, const float *embd, void *ud) -> const char * {
+        auto *s = (cb_state *)ud;
+        if (s->retrievals >= s->max_retrievals || !embd) return nullptr;
+
+        int best_idx = -1;
+        float best_score = -1.0f;
+        for (int k = 0; k < (int)s->kb->size(); ++k) {
+            float score = cosine_similarity(embd, (*s->kb)[k].embedding.data(), s->n_embd);
+            if (score > best_score) { best_score = score; best_idx = k; }
+        }
+
+        if (best_idx >= 0 && best_score > 0.0f) {
+            s->retrievals++;
+            // Return the fact text — generate loop handles rewind + inject
+            return (*s->kb)[best_idx].text.c_str();
+        }
+        return nullptr;
+    };
+    gc.entropy_cb_data = &state;
+
+    // Confidence callback — store confident spans
+    gc.confidence_cb = [](const lfg_confidence_event *ev, const float *embd, void *ud) {
+        auto *s = (cb_state *)ud;
+        store_entry entry;
+        entry.event = *ev;
+        if (embd && ev->n_embd > 0) {
+            entry.embedding.assign(embd, embd + ev->n_embd);
+        }
+        s->stored.push_back(std::move(entry));
+    };
+    gc.confidence_cb_data = &state;
+
+    lfg_generate_result result = lfg_session_generate(session, gc);
+
+    MESSAGE("Generated " << result.n_tokens << " tokens");
+    MESSAGE("Retrievals: " << result.n_retrievals);
+    MESSAGE("Confidence spans stored: " << state.stored.size());
+    MESSAGE("n_confidence_spans in result: " << result.n_confidence_spans);
+
+    // Result counters should match callback invocations
+    CHECK(result.n_confidence_spans == (int32_t)state.stored.size());
+    CHECK(result.n_retrievals == state.retrievals);
+
+    // --- Verify stored spans ---
+    if (!state.stored.empty()) {
+        MESSAGE("--- Stored span details ---");
+        for (int i = 0; i < (int)state.stored.size(); ++i) {
+            auto &s = state.stored[i];
+            MESSAGE("  Span " << i << ": len=" << s.event.span_length
+                    << " mean_H=" << s.event.mean_entropy
+                    << " min_H=" << s.event.min_entropy
+                    << " pos=[" << s.event.start_pos << "," << s.event.end_pos << "]"
+                    << " has_embd=" << !s.embedding.empty());
+
+            // Event field sanity
+            CHECK(s.event.span_length >= ccfg.min_span);
+            CHECK(s.event.mean_entropy >= 0.0f);
+            CHECK(s.event.mean_entropy <= ccfg.threshold);
+            CHECK(s.event.min_entropy <= s.event.mean_entropy);
+            CHECK(s.event.end_pos > s.event.start_pos);
+        }
+
+        // Find the first stored span that has an embedding
+        int embd_idx = -1;
+        for (int i = 0; i < (int)state.stored.size(); ++i) {
+            if (!state.stored[i].embedding.empty()) { embd_idx = i; break; }
+        }
+
+        if (embd_idx >= 0) {
+            auto &entry = state.stored[embd_idx];
+
+            // Embedding should be L2-normalized
+            float norm_sq = 0;
+            for (float v : entry.embedding) norm_sq += v * v;
+            CHECK(norm_sq == doctest::Approx(1.0f).epsilon(0.05));
+
+            // Stored embedding should be more similar to the prompt topic
+            // than to an unrelated topic (chocolate cake)
+            float sim_topic = cosine_similarity(entry.embedding.data(), topic_embd.data(), n_embd);
+            float sim_unrelated = cosine_similarity(entry.embedding.data(), unrelated_embd.data(), n_embd);
+
+            MESSAGE("  Stored span " << embd_idx << " sim to topic: " << sim_topic);
+            MESSAGE("  Stored span " << embd_idx << " sim to unrelated: " << sim_unrelated);
+            CHECK_MESSAGE(sim_topic > sim_unrelated,
+                          "Stored confident span should be more related to Eiffel Tower than chocolate cake");
+        } else {
+            MESSAGE("No stored spans had embeddings — skipping semantic check");
+        }
+    } else {
+        MESSAGE("No confidence spans stored — model entropy may not have dropped below threshold");
+    }
+
+    lfg_session_free(session);
+}
