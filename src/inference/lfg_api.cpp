@@ -737,6 +737,12 @@ LFG_API void lfg_session_free(lfg_session * session) {
     free(session->logits_buf);
 
     // Entropy monitor
+    // Zero the entropy counter before freeing so stale pointers read 0 instead
+    // of ghost data. Does not prevent UB, but makes use-after-free benign in
+    // practice (polling threads see 0 pending and stop).
+    session->entropy_write_idx = 0;
+    session->entropy_read_idx = 0;
+
     free(session->entropy_slots);
     free(session->entropy_snaps);
     free(session->entropy_embd_pool);
@@ -1680,20 +1686,20 @@ LFG_API lfg_entropy_monitor_config lfg_entropy_monitor_default_config(void) {
     return cfg;
 }
 
-LFG_API bool lfg_session_configure_entropy_monitor(
+LFG_API int32_t lfg_session_configure_entropy_monitor(
     lfg_session * session, const lfg_entropy_monitor_config * config) {
-    if (!session) return false;
+    if (!session) return 0;
 
     // Pass NULL to disable
     if (!config) {
         session->entropy_active = false;
-        return true;
+        return 0;
     }
 
     if (!session_ensure_embed_ctx(session)) {
         lfg_set_last_error(LFG_ERROR_INTERNAL,
             "%s: failed to create embedding context", __func__);
-        return false;
+        return 0;
     }
 
     int32_t cap = config->ring_size > 0 ? config->ring_size : 4;
@@ -1726,7 +1732,7 @@ LFG_API bool lfg_session_configure_entropy_monitor(
     session->entropy_last_norm    = -1.0f;
     session->entropy_active       = true;
 
-    return true;
+    return n_embd;
 }
 
 LFG_API bool lfg_session_entropy_pop(lfg_session * session,

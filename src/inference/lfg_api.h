@@ -144,7 +144,9 @@ typedef struct lfg_entropy_monitor_config {
 LFG_API lfg_entropy_monitor_config lfg_entropy_monitor_default_config(void);
 
 // Configure. Allocates ring buffer + embedding context. Pass NULL to disable.
-LFG_API bool lfg_session_configure_entropy_monitor(
+// Returns n_embd (> 0) on success — use this to size your entropy_pop embedding buffer.
+// Returns 0 on failure or when passing NULL (disable).
+LFG_API int32_t lfg_session_configure_entropy_monitor(
     lfg_session * session, const lfg_entropy_monitor_config * config);
 
 // Pop next pending event. Copies embedding into embd_out (must be >= n_embd floats).
