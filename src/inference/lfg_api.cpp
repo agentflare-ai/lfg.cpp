@@ -1916,6 +1916,195 @@ LFG_API int32_t lfg_session_embed(lfg_session * session,
 }
 
 // ---------------------------------------------------------------------------
+// Generate Loop API
+// ---------------------------------------------------------------------------
+
+LFG_API lfg_generate_config lfg_generate_default_config(void) {
+    lfg_generate_config cfg{};
+    cfg.max_tokens = 0;
+    cfg.token_cb = nullptr;
+    cfg.token_cb_data = nullptr;
+    cfg.entropy_cb = nullptr;
+    cfg.entropy_cb_data = nullptr;
+    return cfg;
+}
+
+LFG_API lfg_generate_result lfg_session_generate(
+    lfg_session * session, const lfg_generate_config * config)
+{
+    lfg_generate_result result{};
+    if (!session) return result;
+
+    const lfg_vocab *vocab = lfg_model_get_vocab(session->model);
+    int32_t max_tokens = config && config->max_tokens > 0
+        ? config->max_tokens
+        : (session->config.max_tokens > 0 ? session->config.max_tokens : 4096);
+
+    char piece_buf[256];
+    bool stopped = false;
+
+    // Pre-allocate embedding buffer for entropy callbacks (zero-alloc in hot path)
+    float *embd_buf = nullptr;
+    if (config && config->entropy_cb && session->entropy_active && session->entropy_n_embd > 0) {
+        embd_buf = (float *)alloca(session->entropy_n_embd * sizeof(float));
+    }
+
+    for (int32_t i = 0; i < max_tokens; ++i) {
+        lfg_session_decode(session);
+        lfg_token tok = lfg_session_sample(session);
+
+        if (lfg_vocab_is_eog(vocab, tok)) {
+            result.stop_reason = LFG_STOP_EOS;
+            stopped = true;
+            break;
+        }
+
+        // Entropy callback — pop with embedding, let callback pick text to inject.
+        if (config && config->entropy_cb && session->entropy_active) {
+            lfg_entropy_event ev;
+            if (lfg_session_entropy_pop(session, &ev, embd_buf, session->entropy_n_embd)) {
+                const float *embd_ptr = ev.n_embd > 0 ? embd_buf : nullptr;
+                const char *inject = config->entropy_cb(&ev, embd_ptr, config->entropy_cb_data);
+                if (inject) {
+                    // Rewind to checkpoint, tokenize injected text, ingest, continue
+                    if (lfg_session_rewind(session, ev.checkpoint_id)) {
+                        int32_t len = (int32_t)std::strlen(inject);
+                        int32_t tok_cap = len + 16;
+                        lfg_token *inject_toks = (lfg_token *)alloca(tok_cap * sizeof(lfg_token));
+                        int32_t n_inj = lfg_tokenize(vocab, inject, len,
+                                                      inject_toks, tok_cap, false, false);
+                        if (n_inj < 0) {
+                            // Need more space — fall back to malloc
+                            tok_cap = -n_inj;
+                            lfg_token *heap_toks = (lfg_token *)malloc(tok_cap * sizeof(lfg_token));
+                            n_inj = lfg_tokenize(vocab, inject, len,
+                                                  heap_toks, tok_cap, false, false);
+                            if (n_inj > 0) {
+                                lfg_session_ingest_tokens(session, heap_toks, n_inj, false);
+                            }
+                            free(heap_toks);
+                        } else if (n_inj > 0) {
+                            lfg_session_ingest_tokens(session, inject_toks, n_inj, false);
+                        }
+                        result.n_retrievals++;
+                        lfg_session_entropy_flush(session);
+                        continue;  // re-decode from injected position
+                    }
+                }
+                lfg_session_entropy_flush(session);
+            }
+        } else if (session->entropy_active) {
+            lfg_session_entropy_flush(session);
+        }
+
+        result.n_tokens = i + 1;
+
+        // Token callback (for streaming)
+        if (config && config->token_cb) {
+            int32_t n = lfg_token_to_piece(vocab, tok, piece_buf, sizeof(piece_buf), 0, false);
+            if (n < 0) n = 0;
+            lfg_generate_action action = config->token_cb(tok, piece_buf, n, config->token_cb_data);
+            if (action == LFG_GENERATE_STOP) {
+                result.stop_reason = LFG_STOP_CALLBACK;
+                stopped = true;
+                break;
+            }
+        }
+
+        lfg_session_ingest_tokens(session, &tok, 1, false);
+    }
+
+    if (!stopped) {
+        result.stop_reason = LFG_STOP_MAX_TOKENS;
+    }
+
+    return result;
+}
+
+LFG_API lfg_generate_result lfg_session_prompt_generate(
+    lfg_session * session,
+    const char * prompt, int32_t prompt_len,
+    bool add_bos,
+    const lfg_generate_config * config)
+{
+    lfg_generate_result result{};
+    if (!session || !prompt || prompt_len <= 0) return result;
+
+    const lfg_vocab *vocab = lfg_model_get_vocab(session->model);
+    int32_t tok_cap = prompt_len + 16;
+    lfg_token *tokens = (lfg_token *)malloc(tok_cap * sizeof(lfg_token));
+    int32_t n = lfg_tokenize(vocab, prompt, prompt_len, tokens, tok_cap, add_bos, false);
+    if (n < 0) {
+        tok_cap = -n;
+        tokens = (lfg_token *)realloc(tokens, tok_cap * sizeof(lfg_token));
+        n = lfg_tokenize(vocab, prompt, prompt_len, tokens, tok_cap, add_bos, false);
+    }
+
+    if (n <= 0) {
+        free(tokens);
+        lfg_set_last_error(LFG_ERROR_INVALID_ARGUMENT,
+            "%s: tokenization failed", __func__);
+        return result;
+    }
+
+    lfg_session_ingest_tokens(session, tokens, n, true);
+    free(tokens);
+
+    return lfg_session_generate(session, config);
+}
+
+LFG_API lfg_generate_result lfg_session_chat_generate(
+    lfg_session * session,
+    const lfg_chat_message * messages, size_t n_messages,
+    const lfg_generate_config * config)
+{
+    lfg_generate_result result{};
+    if (!session || !messages || n_messages == 0) return result;
+
+    // 1. Detect chat template from model metadata
+    const char *tmpl_str = lfg_model_chat_template(session->model, nullptr);
+
+    // 2. Apply template: first call with NULL buf to get required size
+    int32_t needed = lfg_chat_apply_template(tmpl_str, messages, n_messages, true, nullptr, 0);
+    if (needed <= 0) {
+        lfg_set_last_error(LFG_ERROR_INVALID_ARGUMENT,
+            "%s: chat template failed (unknown template?)", __func__);
+        return result;
+    }
+
+    // Allocate and format
+    char *formatted = (char *)malloc(needed + 1);
+    lfg_chat_apply_template(tmpl_str, messages, n_messages, true, formatted, needed + 1);
+    formatted[needed] = '\0';
+
+    // 3. Tokenize
+    const lfg_vocab *vocab = lfg_model_get_vocab(session->model);
+    int32_t tok_cap = needed + 16;
+    lfg_token *tokens = (lfg_token *)malloc(tok_cap * sizeof(lfg_token));
+    int32_t n = lfg_tokenize(vocab, formatted, needed, tokens, tok_cap, true, false);
+    if (n < 0) {
+        tok_cap = -n;
+        tokens = (lfg_token *)realloc(tokens, tok_cap * sizeof(lfg_token));
+        n = lfg_tokenize(vocab, formatted, needed, tokens, tok_cap, true, false);
+    }
+    free(formatted);
+
+    if (n <= 0) {
+        free(tokens);
+        lfg_set_last_error(LFG_ERROR_INVALID_ARGUMENT,
+            "%s: tokenization failed", __func__);
+        return result;
+    }
+
+    // 4. Ingest prompt
+    lfg_session_ingest_tokens(session, tokens, n, true);
+    free(tokens);
+
+    // 5. Generate
+    return lfg_session_generate(session, config);
+}
+
+// ---------------------------------------------------------------------------
 // Model Loader C API
 // ---------------------------------------------------------------------------
 

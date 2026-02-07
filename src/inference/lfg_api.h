@@ -180,6 +180,69 @@ LFG_API int32_t lfg_session_embed(lfg_session * session,
                                    const char * text, int32_t text_len,
                                    float * out, int32_t out_cap);
 
+// --- Generate Loop API ---
+
+// Token callback return value: continue or stop generation.
+typedef enum { LFG_GENERATE_CONTINUE = 0, LFG_GENERATE_STOP = 1 } lfg_generate_action;
+
+// Called per generated token. Return LFG_GENERATE_CONTINUE or LFG_GENERATE_STOP.
+typedef lfg_generate_action (*lfg_generate_token_cb)(
+    lfg_token token, const char * piece, int32_t piece_len, void * user_data);
+
+// Called when entropy exceeds threshold. Receives event + embedding for KB matching.
+// embedding is n_embd floats (event->n_embd), or NULL if embed failed.
+// Return a C string to inject (generate loop handles rewind + tokenize + ingest),
+// or NULL to skip this event and keep generating. String must be valid until callback returns.
+typedef const char * (*lfg_generate_entropy_cb)(
+    const lfg_entropy_event * event, const float * embedding, void * user_data);
+
+typedef struct lfg_generate_config {
+    int32_t  max_tokens;          // Hard token limit. 0 = use session config.
+
+    // Callbacks (nullable — NULL means no callback)
+    lfg_generate_token_cb    token_cb;
+    void                   * token_cb_data;
+    lfg_generate_entropy_cb  entropy_cb;
+    void                   * entropy_cb_data;
+} lfg_generate_config;
+
+// Why generation stopped.
+typedef enum {
+    LFG_STOP_EOS        = 0,  // End-of-generation token
+    LFG_STOP_MAX_TOKENS = 1,  // Hit max_tokens limit
+    LFG_STOP_CALLBACK   = 2,  // Token callback returned STOP
+} lfg_stop_reason;
+
+typedef struct lfg_generate_result {
+    int32_t          n_tokens;       // Tokens generated
+    int32_t          n_retrievals;   // Number of entropy-triggered rewind+inject cycles
+    lfg_stop_reason  stop_reason;    // Why generation stopped
+} lfg_generate_result;
+
+// Default generate config (max_tokens=0, all callbacks NULL).
+LFG_API lfg_generate_config lfg_generate_default_config(void);
+
+// Generate from current session state (prompt already ingested).
+// Runs decode+sample+ingest loop on C side. Returns when stopped.
+LFG_API lfg_generate_result lfg_session_generate(
+    lfg_session * session, const lfg_generate_config * config);
+
+// Prompt-level: tokenize raw text, ingest, generate.
+// One FFI call for instruction/completion-style generation.
+// add_bos controls whether a BOS token is prepended during tokenization.
+LFG_API lfg_generate_result lfg_session_prompt_generate(
+    lfg_session * session,
+    const char * prompt, int32_t prompt_len,
+    bool add_bos,
+    const lfg_generate_config * config);
+
+// Chat-level: format messages with model's chat template, tokenize, ingest, generate.
+// One FFI call for the entire chat->generation pipeline.
+LFG_API lfg_generate_result lfg_session_chat_generate(
+    lfg_session * session,
+    const lfg_chat_message * messages, size_t n_messages,
+    const lfg_generate_config * config);
+
 // --- Model Loader C API (replaces liquid::ModelLoader) ---
 
 typedef struct lfg_model_load_config {
