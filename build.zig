@@ -731,6 +731,12 @@ fn addExecutables(
     addCommonExeLinks(compare_rmsnorm, target, framework_path, private_framework_path, sysroot);
     b.installArtifact(compare_rmsnorm);
 
+    const bench_tool_ranking = addExe(b, target, optimize, "bench-tool-ranking", &[_][]const u8{"src/eval/bench_tool_ranking.cpp"}, spdlog_include, cxx_flags, framework_path, private_framework_path);
+    bench_tool_ranking.linkLibrary(lfg_core);
+    bench_tool_ranking.linkLibrary(ggml);
+    addCommonExeLinks(bench_tool_ranking, target, framework_path, private_framework_path, sysroot);
+    b.installArtifact(bench_tool_ranking);
+
     const llama_struct = addExe(b, target, optimize, "llama-structured-compare", &[_][]const u8{
         "src/eval/llama_structured_compare.cpp",
         "src/inference/json_schema_to_grammar.cpp",
@@ -834,6 +840,7 @@ fn addTests(
         "test_session_lifecycle",
         "test_checkpoint_state",
         "test_max_tokens_reasoning",
+        "test_tool_ranker",
     };
 
     const test_files = [_][]const u8{
@@ -864,6 +871,7 @@ fn addTests(
         "src/tests/test_session_lifecycle.cpp",
         "src/tests/test_checkpoint_state.cpp",
         "src/tests/test_max_tokens_reasoning.cpp",
+        "src/tests/test_tool_ranker.cpp",
     };
 
     var test_step = b.step("test", "Build and run tests");

@@ -4,6 +4,7 @@
 #include "lfg_impl.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -126,6 +127,38 @@ struct lfg_session {
     // Scratch (pre-allocated to n_batch)
     lfg_pos *pos_buf;      size_t pos_buf_cap;
     int8_t  *logits_buf;   size_t logits_buf_cap;
+
+    // Tool ranking state (all buffers pre-allocated at register time)
+    struct lfg_tool_entry {
+        char    *name;                 // strdup'd
+        char    *xml_text;             // strdup'd pre-formatted XML
+        int32_t  xml_text_len;         // strlen of xml_text
+        int32_t  token_cost;           // token count of xml_text
+        float   *embedding;           // malloc'd, L2-normalized, size = n_embd
+    };
+
+    lfg_context     *tool_ctx;         // Separate context for computing tool embeddings
+    lfg_tool_entry  *tool_entries;     // malloc'd array, size = tool_count
+    int32_t          tool_count;
+    int32_t          tool_n_embd;      // cached n_embd for dot products
+
+    // Embedding cache (parallel arrays, sized to tool_count)
+    uint64_t        *tool_cache_hashes;   // malloc'd
+    float           *tool_cache_embeds;   // malloc'd, flat [cache_count * n_embd]
+    int32_t          tool_cache_count;
+    int32_t          tool_cache_cap;
+
+    // Decode-time scratch (pre-allocated at register time, zero allocs in decode)
+    float           *tool_query_embd;     // malloc'd, size = n_embd
+    int32_t         *tool_score_indices;  // malloc'd, size = tool_count (sorted by score)
+    float           *tool_scores;         // malloc'd, size = tool_count
+    char            *tool_xml_buf;        // malloc'd, pre-computed full XML block
+    int32_t          tool_xml_buf_cap;
+    lfg_token       *tool_token_buf;      // malloc'd, for tokenized XML block
+    int32_t          tool_token_buf_cap;
+
+    int32_t          tool_top_k;            // 0 = disabled
+    bool             tools_injected;       // Reset on session_reset()
 };
 
 // ---------------------------------------------------------------------------
@@ -144,6 +177,51 @@ struct lfg_checkpoint {
     char    *grammar_root;
     lfg_sampler *sampler_state;  // owned clone
 };
+
+// ---------------------------------------------------------------------------
+// Tool ranking helpers (used by both register_tools and decode)
+// ---------------------------------------------------------------------------
+
+static uint64_t fnv1a_hash(const char *data, size_t len) {
+    uint64_t hash = 0xcbf29ce484222325ULL;
+    for (size_t i = 0; i < len; ++i) {
+        hash ^= (uint8_t)data[i];
+        hash *= 0x100000001b3ULL;
+    }
+    return hash;
+}
+
+// Returns malloc'd string. Caller must free.
+static char * tool_format_xml(const lfg_tool_desc *tool, int32_t *out_len) {
+    const char *name = tool->name ? tool->name : "";
+    const char *desc = tool->description ? tool->description : "";
+    const char *schema = tool->json_schema;
+    bool has_schema = schema && schema[0] != '\0';
+
+    // Calculate required size
+    // <tool name="..." description="..."[ schema='...']/>
+    size_t len = 13 + std::strlen(name) + 15 + std::strlen(desc) + 1; // <tool name="..." description="..."
+    if (has_schema) len += 9 + std::strlen(schema) + 1;               //  schema='...'
+    len += 3; // />\n
+
+    char *buf = (char *)malloc(len + 1);
+    int n;
+    if (has_schema) {
+        n = std::snprintf(buf, len + 1, "<tool name=\"%s\" description=\"%s\" schema='%s'/>\n",
+                          name, desc, schema);
+    } else {
+        n = std::snprintf(buf, len + 1, "<tool name=\"%s\" description=\"%s\"/>\n", name, desc);
+    }
+    if (out_len) *out_len = n;
+    return buf;
+}
+
+static void l2_normalize(float *vec, int n) {
+    float sum = 0.0f;
+    for (int i = 0; i < n; ++i) sum += vec[i] * vec[i];
+    float inv_norm = (sum > 0.0f) ? (1.0f / std::sqrt(sum)) : 0.0f;
+    for (int i = 0; i < n; ++i) vec[i] *= inv_norm;
+}
 
 // ---------------------------------------------------------------------------
 // Internal helpers — ported from InferenceCore methods
@@ -514,6 +592,25 @@ LFG_API lfg_session * lfg_session_create(lfg_model * model, const lfg_session_co
     s->logits_buf = (int8_t *)malloc(batch_cap * sizeof(int8_t));
     s->logits_buf_cap = batch_cap;
 
+    // Tool ranking (all nullptr/zero — allocated in register_tools)
+    s->tool_ctx = nullptr;
+    s->tool_entries = nullptr;
+    s->tool_count = 0;
+    s->tool_n_embd = 0;
+    s->tool_cache_hashes = nullptr;
+    s->tool_cache_embeds = nullptr;
+    s->tool_cache_count = 0;
+    s->tool_cache_cap = 0;
+    s->tool_query_embd = nullptr;
+    s->tool_score_indices = nullptr;
+    s->tool_scores = nullptr;
+    s->tool_xml_buf = nullptr;
+    s->tool_xml_buf_cap = 0;
+    s->tool_token_buf = nullptr;
+    s->tool_token_buf_cap = 0;
+    s->tool_top_k = 0;
+    s->tools_injected = false;
+
     session_rebuild_sampler(s);
 
     return s;
@@ -522,6 +619,7 @@ LFG_API lfg_session * lfg_session_create(lfg_model * model, const lfg_session_co
 LFG_API void lfg_session_free(lfg_session * session) {
     if (!session) return;
     if (session->sampler) lfg_sampler_free(session->sampler);
+    lfg_session_clear_tools(session);
     if (session->ctx) lfg_free(session->ctx);
     if (session->healing_sampler_snapshot) lfg_sampler_free(session->healing_sampler_snapshot);
 
@@ -566,6 +664,7 @@ LFG_API void lfg_session_reset(lfg_session * session) {
         lfg_sampler_free(session->healing_sampler_snapshot);
         session->healing_sampler_snapshot = nullptr;
     }
+    session->tools_injected = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -770,7 +869,110 @@ LFG_API bool lfg_session_ingest_tokens(lfg_session * session,
 }
 
 LFG_API bool lfg_session_decode(lfg_session * session) {
-    (void)session;
+    if (!session) return false;
+
+    // Tool ranking and injection (only on first decode when tools are registered)
+    if (session->tool_count > 0 && !session->tools_injected && session->tool_top_k > 0) {
+        int32_t n_embd = session->tool_n_embd;
+        bool got_query_embd = false;
+
+        // Compute mean-pooled query embedding via tool_ctx (same pooling as tool embeddings)
+        int32_t n_prompt = (int32_t)session->token_history.size;
+        if (n_prompt > 0 && session->tool_ctx) {
+            lfg_memory_clear(lfg_get_memory(session->tool_ctx), true);
+
+            // Truncate to tool_ctx capacity if prompt is too long
+            lfg_token *prompt_tokens = session->token_history.data;
+            int32_t ctx_cap = (int32_t)lfg_n_ctx(session->tool_ctx);
+            if (n_prompt > ctx_cap) {
+                prompt_tokens = session->token_history.data + (n_prompt - ctx_cap);
+                n_prompt = ctx_cap;
+            }
+
+            lfg_batch batch = lfg_batch_get_one(prompt_tokens, n_prompt);
+            if (lfg_decode(session->tool_ctx, batch) == 0) {
+                float *embd_ptr = lfg_get_embeddings_seq(session->tool_ctx, 0);
+                if (!embd_ptr) {
+                    embd_ptr = lfg_get_embeddings_ith(session->tool_ctx, -1);
+                }
+                if (embd_ptr) {
+                    std::memcpy(session->tool_query_embd, embd_ptr, n_embd * sizeof(float));
+                    l2_normalize(session->tool_query_embd, n_embd);
+                    got_query_embd = true;
+                }
+            }
+        }
+
+        if (got_query_embd) {
+            // Compute cosine similarity into pre-allocated arrays
+            for (int32_t i = 0; i < session->tool_count; ++i) {
+                float dot = 0.0f;
+                const float *te = session->tool_entries[i].embedding;
+                const float *qe = session->tool_query_embd;
+                for (int j = 0; j < n_embd; ++j) dot += qe[j] * te[j];
+                session->tool_scores[i] = dot;
+                session->tool_score_indices[i] = i;
+            }
+
+            // Sort indices by descending score (insertion sort — tool_count is small)
+            for (int32_t i = 1; i < session->tool_count; ++i) {
+                int32_t key_idx = session->tool_score_indices[i];
+                float key_score = session->tool_scores[key_idx];
+                int32_t j = i - 1;
+                while (j >= 0 && session->tool_scores[session->tool_score_indices[j]] < key_score) {
+                    session->tool_score_indices[j + 1] = session->tool_score_indices[j];
+                    j--;
+                }
+                session->tool_score_indices[j + 1] = key_idx;
+            }
+
+            // Log ranking
+            for (int32_t i = 0; i < session->tool_count; ++i) {
+                int32_t idx = session->tool_score_indices[i];
+                LFG_LOG_DEBUG("tool_rank[%d]: %s score=%.6f",
+                              i, session->tool_entries[idx].name,
+                              session->tool_scores[idx]);
+            }
+
+            // Build XML block with top_k tools into pre-allocated buffer
+            int32_t k = session->tool_top_k;
+            if (k > session->tool_count) k = session->tool_count;
+            int32_t xml_len = 0;
+
+            const char *header = "<tools>\n";
+            const char *footer = "</tools>\n";
+            int32_t header_len = 8;
+            int32_t footer_len = 9;
+
+            std::memcpy(session->tool_xml_buf + xml_len, header, header_len);
+            xml_len += header_len;
+
+            for (int32_t i = 0; i < k; ++i) {
+                auto &tool = session->tool_entries[session->tool_score_indices[i]];
+                std::memcpy(session->tool_xml_buf + xml_len, tool.xml_text, tool.xml_text_len);
+                xml_len += tool.xml_text_len;
+            }
+
+            std::memcpy(session->tool_xml_buf + xml_len, footer, footer_len);
+            xml_len += footer_len;
+            session->tool_xml_buf[xml_len] = '\0';
+
+            // Tokenize into pre-allocated token buffer
+            const lfg_vocab *vocab = lfg_model_get_vocab(session->model);
+            int32_t n_tok = lfg_tokenize(vocab, session->tool_xml_buf, xml_len,
+                                         session->tool_token_buf, session->tool_token_buf_cap,
+                                         false, false);
+
+            LFG_LOG_DEBUG("tool_inject: top_k=%d n_tok=%d", k, n_tok);
+
+            if (n_tok > 0) {
+                lfg_session_ingest_tokens(session, session->tool_token_buf, n_tok, false);
+            }
+        }
+
+        session->tools_injected = true;
+    }
+
     return true;
 }
 
@@ -1124,6 +1326,204 @@ LFG_API void lfg_checkpoint_free(lfg_checkpoint * checkpoint) {
     free(checkpoint->grammar_root);
     if (checkpoint->sampler_state) lfg_sampler_free(checkpoint->sampler_state);
     free(checkpoint);
+}
+
+// ---------------------------------------------------------------------------
+// Tool Ranking API
+// ---------------------------------------------------------------------------
+
+// Free tool entry array contents (not the array itself).
+static void session_free_tool_entries(lfg_session *s) {
+    for (int32_t i = 0; i < s->tool_count; ++i) {
+        free(s->tool_entries[i].name);
+        free(s->tool_entries[i].xml_text);
+        free(s->tool_entries[i].embedding);
+    }
+    free(s->tool_entries);
+    s->tool_entries = nullptr;
+    s->tool_count = 0;
+}
+
+// Look up hash in the linear cache. Returns pointer to embedding or nullptr.
+static const float * tool_cache_lookup(const lfg_session *s, uint64_t hash) {
+    for (int32_t i = 0; i < s->tool_cache_count; ++i) {
+        if (s->tool_cache_hashes[i] == hash)
+            return s->tool_cache_embeds + (size_t)i * s->tool_n_embd;
+    }
+    return nullptr;
+}
+
+// Append to linear cache, growing if needed.
+static void tool_cache_insert(lfg_session *s, uint64_t hash, const float *embd) {
+    if (s->tool_cache_count >= s->tool_cache_cap) {
+        int32_t new_cap = s->tool_cache_cap ? s->tool_cache_cap * 2 : 16;
+        s->tool_cache_hashes = (uint64_t *)realloc(s->tool_cache_hashes, new_cap * sizeof(uint64_t));
+        s->tool_cache_embeds = (float *)realloc(s->tool_cache_embeds, (size_t)new_cap * s->tool_n_embd * sizeof(float));
+        s->tool_cache_cap = new_cap;
+    }
+    s->tool_cache_hashes[s->tool_cache_count] = hash;
+    std::memcpy(s->tool_cache_embeds + (size_t)s->tool_cache_count * s->tool_n_embd,
+                embd, s->tool_n_embd * sizeof(float));
+    s->tool_cache_count++;
+}
+
+LFG_API int32_t lfg_session_register_tools(lfg_session * session,
+                                           const lfg_tool_desc * tools, int32_t n_tools,
+                                           int32_t top_k) {
+    if (!session || !tools || n_tools <= 0) {
+        if (session) {
+            lfg_set_last_error(LFG_ERROR_INVALID_ARGUMENT,
+                "%s: invalid arguments", __func__);
+        }
+        return -1;
+    }
+
+    try {
+        // Create tool context if needed (embeddings + mean pooling for semantic similarity)
+        if (!session->tool_ctx) {
+            lfg_context_params tparams = lfg_context_default_params();
+            tparams.n_ctx = 512;
+            tparams.n_batch = 512;
+            tparams.n_threads = session->config.n_threads;
+            tparams.embeddings = true;
+            tparams.pooling_type = LFG_POOLING_TYPE_MEAN;
+            session->tool_ctx = lfg_init_from_model(session->model, tparams);
+            if (!session->tool_ctx) {
+                lfg_set_last_error(LFG_ERROR_INTERNAL,
+                    "%s: failed to create tool context", __func__);
+                return -1;
+            }
+        }
+
+        const lfg_vocab *vocab = lfg_model_get_vocab(session->model);
+        int32_t n_embd = lfg_model_n_embd(session->model);
+
+        // Free previous entries (but keep cache)
+        session_free_tool_entries(session);
+
+        session->tool_n_embd = n_embd;
+        session->tool_top_k = top_k;
+        session->tools_injected = false;
+
+        // Allocate tool entries
+        session->tool_entries = (lfg_session::lfg_tool_entry *)calloc(n_tools, sizeof(lfg_session::lfg_tool_entry));
+        session->tool_count = n_tools;
+
+        // Scratch for tokenization during registration (freed at end)
+        int32_t tok_scratch_cap = 512;
+        lfg_token *tok_scratch = (lfg_token *)malloc(tok_scratch_cap * sizeof(lfg_token));
+
+        // Total XML size for pre-allocating decode-time buffer
+        int32_t total_xml_bytes = 0;
+
+        for (int32_t i = 0; i < n_tools; ++i) {
+            auto &entry = session->tool_entries[i];
+            int32_t xml_len = 0;
+            entry.xml_text = tool_format_xml(&tools[i], &xml_len);
+            entry.xml_text_len = xml_len;
+            entry.name = strdup(tools[i].name ? tools[i].name : "");
+            total_xml_bytes += xml_len;
+
+            uint64_t hash = fnv1a_hash(entry.xml_text, xml_len);
+
+            // Token cost
+            if (xml_len + 16 > tok_scratch_cap) {
+                tok_scratch_cap = xml_len + 16;
+                tok_scratch = (lfg_token *)realloc(tok_scratch, tok_scratch_cap * sizeof(lfg_token));
+            }
+            int32_t n_tok = lfg_tokenize(vocab, entry.xml_text, xml_len,
+                                         tok_scratch, tok_scratch_cap, false, false);
+            entry.token_cost = (n_tok > 0) ? n_tok : 0;
+
+            // Check embedding cache
+            const float *cached = tool_cache_lookup(session, hash);
+            if (cached) {
+                entry.embedding = (float *)malloc(n_embd * sizeof(float));
+                std::memcpy(entry.embedding, cached, n_embd * sizeof(float));
+            } else {
+                // Compute embedding via tool_ctx
+                lfg_memory_clear(lfg_get_memory(session->tool_ctx), true);
+
+                if (xml_len + 16 > tok_scratch_cap) {
+                    tok_scratch_cap = xml_len + 16;
+                    tok_scratch = (lfg_token *)realloc(tok_scratch, tok_scratch_cap * sizeof(lfg_token));
+                }
+                int32_t n_emb_tok = lfg_tokenize(vocab, entry.xml_text, xml_len,
+                                                  tok_scratch, tok_scratch_cap, true, false);
+
+                entry.embedding = (float *)calloc(n_embd, sizeof(float));
+
+                if (n_emb_tok > 0) {
+                    lfg_batch batch = lfg_batch_get_one(tok_scratch, n_emb_tok);
+                    if (lfg_decode(session->tool_ctx, batch) == 0) {
+                        // Use mean-pooled embedding via seq_id 0
+                        float *embd_ptr = lfg_get_embeddings_seq(session->tool_ctx, 0);
+                        if (!embd_ptr) {
+                            // Fallback to last-token embedding
+                            embd_ptr = lfg_get_embeddings_ith(session->tool_ctx, -1);
+                        }
+                        if (embd_ptr) {
+                            std::memcpy(entry.embedding, embd_ptr, n_embd * sizeof(float));
+                            l2_normalize(entry.embedding, n_embd);
+                        }
+                    }
+                }
+
+                tool_cache_insert(session, hash, entry.embedding);
+            }
+        }
+
+        free(tok_scratch);
+
+        // Pre-allocate decode-time scratch buffers
+        // XML buffer: <tools>\n + all tool XML + </tools>\n + NUL
+        int32_t xml_buf_cap = total_xml_bytes + 32;
+        session->tool_xml_buf = (char *)realloc(session->tool_xml_buf, xml_buf_cap);
+        session->tool_xml_buf_cap = xml_buf_cap;
+
+        // Token buffer: worst case ~ xml_buf_cap tokens (1 byte = 1 token)
+        int32_t token_buf_cap = xml_buf_cap + 32;
+        session->tool_token_buf = (lfg_token *)realloc(session->tool_token_buf, token_buf_cap * sizeof(lfg_token));
+        session->tool_token_buf_cap = token_buf_cap;
+
+        // Query embedding scratch
+        session->tool_query_embd = (float *)realloc(session->tool_query_embd, n_embd * sizeof(float));
+
+        // Score arrays
+        session->tool_score_indices = (int32_t *)realloc(session->tool_score_indices, n_tools * sizeof(int32_t));
+        session->tool_scores = (float *)realloc(session->tool_scores, n_tools * sizeof(float));
+
+        return n_tools;
+    } catch (const std::exception &err) {
+        lfg_set_last_error(LFG_ERROR_INTERNAL,
+            "%s: failed: %s", __func__, err.what());
+        return -1;
+    }
+}
+
+LFG_API void lfg_session_clear_tools(lfg_session * session) {
+    if (!session) return;
+    session_free_tool_entries(session);
+    session->tool_top_k = 0;
+    session->tools_injected = false;
+    if (session->tool_ctx) {
+        lfg_free(session->tool_ctx);
+        session->tool_ctx = nullptr;
+    }
+    free(session->tool_cache_hashes);
+    free(session->tool_cache_embeds);
+    session->tool_cache_hashes = nullptr;
+    session->tool_cache_embeds = nullptr;
+    session->tool_cache_count = 0;
+    session->tool_cache_cap = 0;
+    free(session->tool_query_embd);    session->tool_query_embd = nullptr;
+    free(session->tool_score_indices); session->tool_score_indices = nullptr;
+    free(session->tool_scores);        session->tool_scores = nullptr;
+    free(session->tool_xml_buf);       session->tool_xml_buf = nullptr;
+    session->tool_xml_buf_cap = 0;
+    free(session->tool_token_buf);     session->tool_token_buf = nullptr;
+    session->tool_token_buf_cap = 0;
+    session->tool_n_embd = 0;
 }
 
 // ---------------------------------------------------------------------------

@@ -104,6 +104,24 @@ LFG_API bool lfg_session_restore_checkpoint_ex(lfg_session * session,
 LFG_API bool lfg_session_restore_checkpoint(lfg_session * session, const lfg_checkpoint * checkpoint);
 LFG_API void lfg_checkpoint_free(lfg_checkpoint * checkpoint);
 
+// --- Tool Ranking API ---
+
+typedef struct lfg_tool_desc {
+    const char * name;
+    const char * description;
+    const char * json_schema;  // nullable
+} lfg_tool_desc;
+
+// Register tools with the session. Computes & caches embeddings internally.
+// top_k: number of highest-ranked tools to inject into context. 0 = disabled.
+// Returns number of tools registered, or -1 on error.
+LFG_API int32_t lfg_session_register_tools(lfg_session * session,
+                                           const lfg_tool_desc * tools, int32_t n_tools,
+                                           int32_t top_k);
+
+// Clear registered tools and free tool context.
+LFG_API void lfg_session_clear_tools(lfg_session * session);
+
 // --- Model Loader C API (replaces liquid::ModelLoader) ---
 
 typedef struct lfg_model_load_config {
