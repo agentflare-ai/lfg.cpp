@@ -859,6 +859,7 @@ fn addTests(
         "test_structured_generate",
         "test_chat_integration",
         "test_tool_injection",
+        "test_tool_chat_integration",
     };
 
     const test_files = [_][]const u8{
@@ -896,6 +897,7 @@ fn addTests(
         "src/tests/test_structured_generate.cpp",
         "src/tests/test_chat_integration.cpp",
         "src/tests/test_tool_injection.cpp",
+        "src/tests/test_tool_chat_integration.cpp",
     };
 
     var test_step = b.step("test", "Build and run tests");
