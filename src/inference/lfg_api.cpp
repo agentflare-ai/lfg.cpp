@@ -146,6 +146,7 @@ struct lfg_session {
     size_t    *stop_lengths;       // length of each sequence
     size_t     stop_count;         // number of sequences
     size_t     stop_max_len;       // max sequence length (for lookback)
+    int32_t    last_stop_len;      // length of last matched stop seq (set by sample)
 
     // Reasoning state tracking (mirrors old InferenceCore fields)
     bool   in_reasoning;
@@ -1293,6 +1294,7 @@ LFG_API lfg_token lfg_session_sample(lfg_session * session) {
             if (seq[slen - 1] != token) continue;
 
             if (slen == 1) {
+                session->last_stop_len = 1;
                 return lfg_vocab_eos(lfg_model_get_vocab(session->model));
             }
 
@@ -1302,6 +1304,7 @@ LFG_API lfg_token lfg_session_sample(lfg_session * session) {
 
             const lfg_token *tail = session->token_history.data + hist_len - (slen - 1);
             if (std::memcmp(tail, seq, (slen - 1) * sizeof(lfg_token)) == 0) {
+                session->last_stop_len = (int32_t)slen;
                 return lfg_vocab_eos(lfg_model_get_vocab(session->model));
             }
         }
@@ -2183,12 +2186,56 @@ LFG_API lfg_generate_result lfg_session_generate(
         conf_embd_buf = (float *)alloca(session->confidence_n_embd * sizeof(float));
     }
 
+    // -----------------------------------------------------------------------
+    // Stop-sequence look-ahead buffer.
+    // When multi-token stop sequences are configured, we hold back the last
+    // (stop_max_len - 1) tokens before emitting them through the callback.
+    // When sample() fires a stop sequence, the buffer contains up to
+    // (last_stop_len - 1) prefix tokens that must be suppressed.
+    // -----------------------------------------------------------------------
+    struct stop_slot {
+        lfg_token token;
+        int32_t   piece_len;
+        char      piece[256];
+    };
+
+    int32_t stop_buf_cap = (session->stop_max_len > 1 && config.token_cb)
+        ? (int32_t)(session->stop_max_len - 1) : 0;
+    stop_slot *stop_buf = nullptr;
+    int32_t stop_buf_count = 0;
+
+    if (stop_buf_cap > 0) {
+        stop_buf = (stop_slot *)alloca(stop_buf_cap * sizeof(stop_slot));
+    }
+
+    session->last_stop_len = 0;
+
     for (int32_t i = 0; i < max_tokens; ++i) {
         lfg_session_decode(session);
         lfg_token tok = lfg_session_sample(session);
 
         if (lfg_vocab_is_eog(vocab, tok)) {
-            result.stop_reason = LFG_STOP_EOS;
+            // Flush buffered tokens, discarding stop sequence prefix tokens
+            if (stop_buf_count > 0) {
+                int32_t discard = (session->last_stop_len > 1)
+                    ? (session->last_stop_len - 1) : 0;
+                int32_t flush_n = stop_buf_count - discard;
+                if (flush_n < 0) flush_n = 0;
+                for (int32_t j = 0; j < flush_n; j++) {
+                    lfg_generate_action action = config.token_cb(
+                        stop_buf[j].token, stop_buf[j].piece,
+                        stop_buf[j].piece_len, config.token_cb_data);
+                    if (action == LFG_GENERATE_STOP) {
+                        result.stop_reason = LFG_STOP_CALLBACK;
+                        stopped = true;
+                        break;
+                    }
+                }
+                stop_buf_count = 0;
+            }
+            if (!stopped) {
+                result.stop_reason = LFG_STOP_EOS;
+            }
             stopped = true;
             break;
         }
@@ -2222,6 +2269,7 @@ LFG_API lfg_generate_result lfg_session_generate(
                         }
                         result.n_retrievals++;
                         lfg_session_entropy_flush(session);
+                        stop_buf_count = 0;  // Rewound — buffered tokens are invalid
                         continue;  // re-decode from injected position
                     }
                 }
@@ -2243,8 +2291,38 @@ LFG_API lfg_generate_result lfg_session_generate(
 
         result.n_tokens = i + 1;
 
-        // Token callback (for streaming)
-        if (config.token_cb) {
+        // Token callback with stop-sequence look-ahead buffering
+        if (stop_buf_cap > 0) {
+            // Convert token to piece text
+            int32_t n = lfg_token_to_piece(vocab, tok, piece_buf, sizeof(piece_buf), 0, false);
+            if (n < 0) n = 0;
+
+            // If buffer full, emit oldest token (confirmed safe — not part of stop seq)
+            if (stop_buf_count == stop_buf_cap) {
+                lfg_generate_action action = config.token_cb(
+                    stop_buf[0].token, stop_buf[0].piece,
+                    stop_buf[0].piece_len, config.token_cb_data);
+                if (action == LFG_GENERATE_STOP) {
+                    result.stop_reason = LFG_STOP_CALLBACK;
+                    stopped = true;
+                    break;
+                }
+                // Shift buffer left by one
+                if (stop_buf_count > 1) {
+                    std::memmove(stop_buf, stop_buf + 1,
+                                 (stop_buf_count - 1) * sizeof(stop_slot));
+                }
+                stop_buf_count--;
+            }
+
+            // Push new token into buffer
+            stop_buf[stop_buf_count].token = tok;
+            stop_buf[stop_buf_count].piece_len = n;
+            std::memcpy(stop_buf[stop_buf_count].piece, piece_buf, n);
+            stop_buf[stop_buf_count].piece[n] = '\0';
+            stop_buf_count++;
+        } else if (config.token_cb) {
+            // No buffering needed — emit directly
             int32_t n = lfg_token_to_piece(vocab, tok, piece_buf, sizeof(piece_buf), 0, false);
             if (n < 0) n = 0;
             lfg_generate_action action = config.token_cb(tok, piece_buf, n, config.token_cb_data);
@@ -2256,6 +2334,20 @@ LFG_API lfg_generate_result lfg_session_generate(
         }
 
         lfg_session_ingest_tokens(session, &tok, 1, false);
+    }
+
+    // Flush remaining buffered tokens on non-EOS stop (max_tokens)
+    if (stop_buf_count > 0 && !stopped) {
+        for (int32_t j = 0; j < stop_buf_count; j++) {
+            lfg_generate_action action = config.token_cb(
+                stop_buf[j].token, stop_buf[j].piece,
+                stop_buf[j].piece_len, config.token_cb_data);
+            if (action == LFG_GENERATE_STOP) {
+                result.stop_reason = LFG_STOP_CALLBACK;
+                stopped = true;
+                break;
+            }
+        }
     }
 
     if (!stopped) {
