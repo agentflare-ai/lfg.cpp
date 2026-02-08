@@ -220,6 +220,45 @@ LFG_API int32_t lfg_session_confidence_pending(lfg_session * session);
 LFG_API void    lfg_session_confidence_flush(lfg_session * session);
 LFG_API volatile int32_t * lfg_session_confidence_counter(lfg_session * session);
 
+// --- Surprise Monitor API (input novelty — high-surprise span detection during ingestion) ---
+
+// Event emitted when a sustained high-surprise span is detected during prompt ingestion.
+typedef struct lfg_surprise_event {
+    float       mean_surprise;   // Average normalized surprise over the span
+    float       max_surprise;    // Maximum normalized surprise in the span
+    int32_t     span_length;     // Number of consecutive high-surprise tokens
+    int32_t     start_pos;       // Token position at span start
+    int32_t     end_pos;         // Token position at span end
+    int32_t     n_embd;          // Embedding dimension (for embd_out sizing)
+} lfg_surprise_event;
+
+typedef struct lfg_surprise_monitor_config {
+    float    threshold;          // Normalized surprise floor (0,1]. Above = surprising.
+    int32_t  min_span;           // Minimum consecutive tokens for event. 0 = default (3).
+    int32_t  ring_size;          // Ring buffer slots. 0 = default (8).
+} lfg_surprise_monitor_config;
+
+// Called when a sustained high-surprise span is detected during prompt ingestion.
+// Receives event + mean-pooled embedding. Informational only.
+typedef void (*lfg_generate_surprise_cb)(
+    const lfg_surprise_event * event, const float * embedding, void * user_data);
+
+LFG_API lfg_surprise_monitor_config lfg_surprise_monitor_default_config(void);
+
+// Configure. Allocates ring buffer + embedding context. Pass NULL to disable.
+// Returns n_embd (> 0) on success, 0 on failure or disable.
+LFG_API int32_t lfg_session_configure_surprise_monitor(
+    lfg_session * session, const lfg_surprise_monitor_config * config);
+
+// Pop next pending event. Copies embedding into embd_out. Returns false if none pending.
+LFG_API bool lfg_session_surprise_pop(lfg_session * session,
+                                       lfg_surprise_event * event_out,
+                                       float * embd_out, int32_t embd_cap);
+
+LFG_API int32_t lfg_session_surprise_pending(lfg_session * session);
+LFG_API void    lfg_session_surprise_flush(lfg_session * session);
+LFG_API volatile int32_t * lfg_session_surprise_counter(lfg_session * session);
+
 // --- Embedding API ---
 
 // Compute a mean-pooled, L2-normalized embedding for the given text.
@@ -255,6 +294,8 @@ typedef struct lfg_generate_config {
     void                     * entropy_cb_data;
     lfg_generate_confidence_cb confidence_cb;
     void                     * confidence_cb_data;
+    lfg_generate_surprise_cb   surprise_cb;
+    void                     * surprise_cb_data;
 } lfg_generate_config;
 
 // Why generation stopped.
@@ -268,6 +309,7 @@ typedef struct lfg_generate_result {
     int32_t          n_tokens;            // Tokens generated
     int32_t          n_retrievals;        // Number of entropy-triggered rewind+inject cycles
     int32_t          n_confidence_spans;  // Number of confidence events fired during generation
+    int32_t          n_surprise_spans;    // Number of surprise events from prompt ingestion
     lfg_stop_reason  stop_reason;         // Why generation stopped
 } lfg_generate_result;
 
