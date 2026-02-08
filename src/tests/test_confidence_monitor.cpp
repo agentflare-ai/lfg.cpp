@@ -557,3 +557,69 @@ TEST_CASE("API without monitor returns safe defaults") {
 
     lfg_session_free(session);
 }
+
+// ---------------------------------------------------------------------------
+// Test 14: Reasoning tokens break confidence runs with ignore_reasoning
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Reasoning tokens break confidence runs with ignore_reasoning") {
+    lfg_model *model = get_350m();
+    REQUIRE(model != nullptr);
+
+    const lfg_vocab *vocab = lfg_model_get_vocab(model);
+
+    // Tokenize reasoning delimiters
+    auto start_toks = tokenize(vocab, "<think>", false);
+    auto end_toks = tokenize(vocab, "</think>", false);
+    REQUIRE(start_toks.size() > 0);
+    REQUIRE(end_toks.size() > 0);
+
+    // --- Run WITHOUT ignore_reasoning ---
+    lfg_session_config config = lfg_session_default_config();
+    config.n_ctx = 2048;
+    config.sampling.temp = 0.0f;
+    config.reasoning_budget = 50;
+    lfg_session *session = lfg_session_create(model, &config);
+    REQUIRE(session != nullptr);
+
+    lfg_session_configure_reasoning(session,
+        start_toks.data(), start_toks.size(),
+        end_toks.data(), end_toks.size());
+
+    lfg_confidence_monitor_config ccfg = lfg_confidence_monitor_default_config();
+    ccfg.threshold = 0.99f;
+    ccfg.min_span = 2;
+    ccfg.ring_size = 16;
+    ccfg.ignore_reasoning = false;
+    REQUIRE(lfg_session_configure_confidence_monitor(session, &ccfg) > 0);
+
+    auto tokens = tokenize(vocab, "The capital of France is Paris", true);
+    REQUIRE(lfg_session_ingest_tokens(session, tokens.data(), tokens.size(), true));
+
+    lfg_generate_config gc = lfg_generate_default_config();
+    gc.max_tokens = 30;
+    lfg_generate_result r1 = lfg_session_generate(session, gc);
+    int32_t events_without = r1.n_confidence_spans;
+    MESSAGE("Events without ignore_reasoning: " << events_without);
+
+    // --- Run WITH ignore_reasoning ---
+    lfg_session_reset(session);
+
+    lfg_confidence_monitor_config ccfg2 = lfg_confidence_monitor_default_config();
+    ccfg2.threshold = 0.99f;
+    ccfg2.min_span = 2;
+    ccfg2.ring_size = 16;
+    ccfg2.ignore_reasoning = true;
+    REQUIRE(lfg_session_configure_confidence_monitor(session, &ccfg2) > 0);
+
+    REQUIRE(lfg_session_ingest_tokens(session, tokens.data(), tokens.size(), true));
+
+    lfg_generate_result r2 = lfg_session_generate(session, gc);
+    int32_t events_with = r2.n_confidence_spans;
+    MESSAGE("Events with ignore_reasoning: " << events_with);
+
+    // With reasoning tokens treated as run-breakers, events should be <= without
+    CHECK(events_with <= events_without);
+
+    lfg_session_free(session);
+}

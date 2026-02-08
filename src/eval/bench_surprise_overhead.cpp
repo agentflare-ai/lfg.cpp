@@ -41,8 +41,6 @@ static bench_result run_trial(lfg_model *model, const lfg_vocab *vocab,
     if (enable_surprise) {
         lfg_surprise_monitor_config scfg = lfg_surprise_monitor_default_config();
         scfg.threshold = 0.3f;
-        scfg.min_span = 3;
-        scfg.ring_size = 16;
         lfg_session_configure_surprise_monitor(session, &scfg);
     }
 
@@ -53,9 +51,10 @@ static bench_result run_trial(lfg_model *model, const lfg_vocab *vocab,
     r.ingest_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
     r.prompt_tps = (double)n_prompt / (r.ingest_ms / 1000.0);
 
-    // Flush surprise events so they don't interfere with generation timing
+    // Pop surprise event so it doesn't interfere with generation timing
     if (enable_surprise) {
-        lfg_session_surprise_flush(session);
+        lfg_surprise_event sev;
+        lfg_session_surprise_pop(session, &sev, nullptr, 0);
     }
 
     // Benchmark generation
@@ -160,11 +159,10 @@ int main() {
                 lfg_session *s = lfg_session_create(model, &cfg);
                 lfg_surprise_monitor_config scfg = lfg_surprise_monitor_default_config();
                 scfg.threshold = 0.3f;
-                scfg.min_span = 3;
-                scfg.ring_size = 16;
                 lfg_session_configure_surprise_monitor(s, &scfg);
                 lfg_session_ingest_tokens(s, toks, n, true);
-                surprise_events = lfg_session_surprise_pending(s);
+                lfg_surprise_event sev;
+                surprise_events = lfg_session_surprise_pop(s, &sev, nullptr, 0) ? 1 : 0;
                 lfg_session_free(s);
             }
         }

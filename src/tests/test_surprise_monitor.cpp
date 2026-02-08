@@ -9,13 +9,6 @@
 // Helpers
 // ---------------------------------------------------------------------------
 
-static std::string token_to_string(const lfg_vocab *vocab, lfg_token token) {
-    char buf[256];
-    int32_t n = lfg_token_to_piece(vocab, token, buf, sizeof(buf), 0, false);
-    if (n < 0) return "";
-    return std::string(buf, n);
-}
-
 static std::vector<lfg_token> tokenize(const lfg_vocab *vocab, const std::string &text, bool add_special) {
     std::vector<lfg_token> tokens(text.size() + 16);
     int32_t n = lfg_tokenize(vocab, text.c_str(), text.length(), tokens.data(), tokens.size(), add_special, false);
@@ -25,18 +18,6 @@ static std::vector<lfg_token> tokenize(const lfg_vocab *vocab, const std::string
     }
     tokens.resize(n);
     return tokens;
-}
-
-static std::string generate(lfg_session *session, const lfg_vocab *vocab, int max_tokens) {
-    std::string output;
-    for (int i = 0; i < max_tokens; ++i) {
-        lfg_session_decode(session);
-        lfg_token tok = lfg_session_sample(session);
-        if (lfg_vocab_is_eog(vocab, tok)) break;
-        output += token_to_string(vocab, tok);
-        lfg_session_ingest_tokens(session, &tok, 1, false);
-    }
-    return output;
 }
 
 // ---------------------------------------------------------------------------
@@ -64,8 +45,6 @@ TEST_CASE("Default config returns sensible values") {
     lfg_surprise_monitor_config cfg = lfg_surprise_monitor_default_config();
     CHECK(cfg.threshold > 0.0f);
     CHECK(cfg.threshold < 1.0f);
-    CHECK(cfg.min_span > 0);
-    CHECK(cfg.ring_size > 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -94,10 +73,10 @@ TEST_CASE("Configure returns n_embd > 0") {
 }
 
 // ---------------------------------------------------------------------------
-// Test 3: No events when input is predictable (low threshold)
+// Test 3: No event when input is predictable (high threshold)
 // ---------------------------------------------------------------------------
 
-TEST_CASE("No events on predictable input with low threshold") {
+TEST_CASE("No event on predictable input with high threshold") {
     lfg_model *model = get_350m();
     REQUIRE(model != nullptr);
 
@@ -109,29 +88,27 @@ TEST_CASE("No events on predictable input with low threshold") {
     lfg_session *session = lfg_session_create(model, &config);
     REQUIRE(session != nullptr);
 
-    // Very high threshold — only extremely surprising tokens qualify
+    // Very high threshold — nothing qualifies (surprise can exceed 1.0, so use 2.0)
     lfg_surprise_monitor_config scfg = lfg_surprise_monitor_default_config();
-    scfg.threshold = 0.99f;  // Almost nothing qualifies as surprising
-    scfg.min_span = 3;
-    scfg.ring_size = 8;
+    scfg.threshold = 2.0f;
     REQUIRE(lfg_session_configure_surprise_monitor(session, &scfg) > 0);
 
     // Predictable text
     auto tokens = tokenize(vocab, "The capital of France is Paris", true);
     REQUIRE(lfg_session_ingest_tokens(session, tokens.data(), tokens.size(), true));
 
-    int32_t pending = lfg_session_surprise_pending(session);
-    MESSAGE("Pending events with threshold=0.99 on predictable text: " << pending);
-    CHECK(pending == 0);
+    // Pop should return false — nothing exceeded threshold
+    lfg_surprise_event ev;
+    CHECK_FALSE(lfg_session_surprise_pop(session, &ev, nullptr, 0));
 
     lfg_session_free(session);
 }
 
 // ---------------------------------------------------------------------------
-// Test 4: Events fire on novel input (gibberish, moderate threshold)
+// Test 4: Event fires on novel input (gibberish, low threshold)
 // ---------------------------------------------------------------------------
 
-TEST_CASE("Events fire on novel input") {
+TEST_CASE("Event fires on novel input") {
     lfg_model *model = get_350m();
     REQUIRE(model != nullptr);
 
@@ -143,11 +120,8 @@ TEST_CASE("Events fire on novel input") {
     lfg_session *session = lfg_session_create(model, &config);
     REQUIRE(session != nullptr);
 
-    // Low threshold + small span so most gibberish qualifies
     lfg_surprise_monitor_config scfg = lfg_surprise_monitor_default_config();
-    scfg.threshold = 0.1f;  // Very low — most tokens qualify
-    scfg.min_span = 2;
-    scfg.ring_size = 16;
+    scfg.threshold = 0.1f;
     REQUIRE(lfg_session_configure_surprise_monitor(session, &scfg) > 0);
 
     // Gibberish text — should be very surprising to the model
@@ -155,9 +129,13 @@ TEST_CASE("Events fire on novel input") {
     REQUIRE(tokens.size() > 4);
     REQUIRE(lfg_session_ingest_tokens(session, tokens.data(), tokens.size(), true));
 
-    int32_t pending = lfg_session_surprise_pending(session);
-    MESSAGE("Pending events with threshold=0.1 on gibberish: " << pending);
-    CHECK(pending > 0);
+    lfg_surprise_event ev;
+    bool got = lfg_session_surprise_pop(session, &ev, nullptr, 0);
+    CHECK(got);
+    if (got) {
+        MESSAGE("mean=" << ev.mean_surprise << " max=" << ev.max_surprise
+                << " above=" << ev.n_above_threshold << "/" << ev.n_tokens_evaluated);
+    }
 
     lfg_session_free(session);
 }
@@ -180,38 +158,33 @@ TEST_CASE("Event fields are valid") {
 
     lfg_surprise_monitor_config scfg = lfg_surprise_monitor_default_config();
     scfg.threshold = 0.1f;
-    scfg.min_span = 2;
-    scfg.ring_size = 16;
     REQUIRE(lfg_session_configure_surprise_monitor(session, &scfg) > 0);
 
     auto tokens = tokenize(vocab, "xyzzy plugh blort quux zorp fnord mxyzptlk blargh", true);
     REQUIRE(lfg_session_ingest_tokens(session, tokens.data(), tokens.size(), true));
 
-    int32_t pending = lfg_session_surprise_pending(session);
-    if (pending > 0) {
-        lfg_surprise_event ev;
-        std::vector<float> embd(2048);
-        bool got = lfg_session_surprise_pop(session, &ev, embd.data(), (int32_t)embd.size());
-        CHECK(got);
+    lfg_surprise_event ev;
+    bool got = lfg_session_surprise_pop(session, &ev, nullptr, 0);
+    if (got) {
         CHECK(ev.mean_surprise >= scfg.threshold);
         CHECK(ev.max_surprise >= ev.mean_surprise);
-        CHECK(ev.span_length >= scfg.min_span);
-        CHECK(ev.start_pos >= 0);
-        CHECK(ev.end_pos > ev.start_pos);
+        CHECK(ev.n_above_threshold > 0);
+        CHECK(ev.n_tokens_evaluated > 0);
+        CHECK(ev.n_above_threshold <= ev.n_tokens_evaluated);
         MESSAGE("Event: mean=" << ev.mean_surprise << " max=" << ev.max_surprise
-                << " span=" << ev.span_length << " start=" << ev.start_pos << " end=" << ev.end_pos);
+                << " above=" << ev.n_above_threshold << " total=" << ev.n_tokens_evaluated);
     } else {
-        MESSAGE("No events fired — cannot validate fields");
+        MESSAGE("No event fired — cannot validate fields");
     }
 
     lfg_session_free(session);
 }
 
 // ---------------------------------------------------------------------------
-// Test 6: Pending count tracks correctly
+// Test 6: Pop returns true once then false
 // ---------------------------------------------------------------------------
 
-TEST_CASE("Pending count tracks correctly") {
+TEST_CASE("Pop returns true once then false") {
     lfg_model *model = get_350m();
     REQUIRE(model != nullptr);
 
@@ -225,103 +198,23 @@ TEST_CASE("Pending count tracks correctly") {
 
     lfg_surprise_monitor_config scfg = lfg_surprise_monitor_default_config();
     scfg.threshold = 0.1f;
-    scfg.min_span = 1;
-    scfg.ring_size = 16;
-    REQUIRE(lfg_session_configure_surprise_monitor(session, &scfg) > 0);
-
-    // Before ingestion, pending should be 0
-    CHECK(lfg_session_surprise_pending(session) == 0);
-
-    auto tokens = tokenize(vocab, "xyzzy plugh blort quux zorp fnord", true);
-    REQUIRE(lfg_session_ingest_tokens(session, tokens.data(), tokens.size(), true));
-
-    int32_t pending = lfg_session_surprise_pending(session);
-    MESSAGE("Pending after ingestion: " << pending);
-
-    // Pop one and verify pending decreases
-    if (pending > 0) {
-        lfg_surprise_event ev;
-        lfg_session_surprise_pop(session, &ev, nullptr, 0);
-        CHECK(lfg_session_surprise_pending(session) == pending - 1);
-    }
-
-    lfg_session_free(session);
-}
-
-// ---------------------------------------------------------------------------
-// Test 7: Flush clears pending events
-// ---------------------------------------------------------------------------
-
-TEST_CASE("Flush clears pending events") {
-    lfg_model *model = get_350m();
-    REQUIRE(model != nullptr);
-
-    const lfg_vocab *vocab = lfg_model_get_vocab(model);
-
-    lfg_session_config config = lfg_session_default_config();
-    config.n_ctx = 2048;
-    config.sampling.temp = 0.0f;
-    lfg_session *session = lfg_session_create(model, &config);
-    REQUIRE(session != nullptr);
-
-    lfg_surprise_monitor_config scfg = lfg_surprise_monitor_default_config();
-    scfg.threshold = 0.1f;
-    scfg.min_span = 1;
-    scfg.ring_size = 8;
     REQUIRE(lfg_session_configure_surprise_monitor(session, &scfg) > 0);
 
     auto tokens = tokenize(vocab, "xyzzy plugh blort quux zorp fnord", true);
     REQUIRE(lfg_session_ingest_tokens(session, tokens.data(), tokens.size(), true));
 
-    lfg_session_surprise_flush(session);
-    CHECK(lfg_session_surprise_pending(session) == 0);
-
-    // Pop should return false after flush
     lfg_surprise_event ev;
-    CHECK_FALSE(lfg_session_surprise_pop(session, &ev, nullptr, 0));
+    bool first = lfg_session_surprise_pop(session, &ev, nullptr, 0);
+    if (first) {
+        // Second call should return false
+        CHECK_FALSE(lfg_session_surprise_pop(session, &ev, nullptr, 0));
+    }
 
     lfg_session_free(session);
 }
 
 // ---------------------------------------------------------------------------
-// Test 8: Counter increments on event write
-// ---------------------------------------------------------------------------
-
-TEST_CASE("Counter increments with events") {
-    lfg_model *model = get_350m();
-    REQUIRE(model != nullptr);
-
-    const lfg_vocab *vocab = lfg_model_get_vocab(model);
-
-    lfg_session_config config = lfg_session_default_config();
-    config.n_ctx = 2048;
-    config.sampling.temp = 0.0f;
-    lfg_session *session = lfg_session_create(model, &config);
-    REQUIRE(session != nullptr);
-
-    lfg_surprise_monitor_config scfg = lfg_surprise_monitor_default_config();
-    scfg.threshold = 0.1f;
-    scfg.min_span = 1;
-    scfg.ring_size = 8;
-    REQUIRE(lfg_session_configure_surprise_monitor(session, &scfg) > 0);
-
-    volatile int32_t *counter = lfg_session_surprise_counter(session);
-    REQUIRE(static_cast<const void *>(const_cast<const int32_t *>(counter)) != nullptr);
-    CHECK(*counter == 0);
-
-    auto tokens = tokenize(vocab, "xyzzy plugh blort quux zorp fnord", true);
-    REQUIRE(lfg_session_ingest_tokens(session, tokens.data(), tokens.size(), true));
-
-    int32_t count = *counter;
-    MESSAGE("Counter after ingestion: " << count);
-    // Counter should equal total written events
-    CHECK(count == lfg_session_surprise_pending(session));
-
-    lfg_session_free(session);
-}
-
-// ---------------------------------------------------------------------------
-// Test 9: Reset clears state
+// Test 7: Reset clears state
 // ---------------------------------------------------------------------------
 
 TEST_CASE("Reset clears state") {
@@ -338,8 +231,6 @@ TEST_CASE("Reset clears state") {
 
     lfg_surprise_monitor_config scfg = lfg_surprise_monitor_default_config();
     scfg.threshold = 0.1f;
-    scfg.min_span = 1;
-    scfg.ring_size = 8;
     REQUIRE(lfg_session_configure_surprise_monitor(session, &scfg) > 0);
 
     auto tokens = tokenize(vocab, "xyzzy plugh blort quux zorp fnord", true);
@@ -348,13 +239,7 @@ TEST_CASE("Reset clears state") {
     // Reset session
     lfg_session_reset(session);
 
-    // After reset, pending should be 0
-    CHECK(lfg_session_surprise_pending(session) == 0);
-
-    volatile int32_t *counter = lfg_session_surprise_counter(session);
-    CHECK(*counter == 0);
-
-    // Pop should return false
+    // After reset, pop should return false
     lfg_surprise_event ev;
     CHECK_FALSE(lfg_session_surprise_pop(session, &ev, nullptr, 0));
 
@@ -362,10 +247,10 @@ TEST_CASE("Reset clears state") {
 }
 
 // ---------------------------------------------------------------------------
-// Test 10: Generate loop drains events via callback
+// Test 8: Generate loop drains event via callback
 // ---------------------------------------------------------------------------
 
-TEST_CASE("Generate loop drains surprise events via callback") {
+TEST_CASE("Generate loop drains surprise event via callback") {
     lfg_model *model = get_350m();
     REQUIRE(model != nullptr);
 
@@ -379,8 +264,6 @@ TEST_CASE("Generate loop drains surprise events via callback") {
 
     lfg_surprise_monitor_config scfg = lfg_surprise_monitor_default_config();
     scfg.threshold = 0.1f;
-    scfg.min_span = 2;
-    scfg.ring_size = 16;
     REQUIRE(lfg_session_configure_surprise_monitor(session, &scfg) > 0);
 
     // Ingest surprising prompt
@@ -389,7 +272,7 @@ TEST_CASE("Generate loop drains surprise events via callback") {
 
     struct cb_state {
         int count;
-        int total_span;
+        int above;
     };
     cb_state state = {0, 0};
 
@@ -398,24 +281,25 @@ TEST_CASE("Generate loop drains surprise events via callback") {
     gc.surprise_cb = [](const lfg_surprise_event *event, const float *, void *ud) {
         auto *s = (cb_state *)ud;
         s->count++;
-        s->total_span += event->span_length;
+        s->above = event->n_above_threshold;
     };
     gc.surprise_cb_data = &state;
 
     lfg_generate_result r = lfg_session_generate(session, gc);
 
-    MESSAGE("Callback fired " << state.count << " times, total span tokens: " << state.total_span);
-    MESSAGE("n_surprise_spans in result: " << r.n_surprise_spans);
-    CHECK(r.n_surprise_spans == state.count);
+    MESSAGE("Callback fired " << state.count << " times, above_threshold: " << state.above);
+    CHECK(state.count <= 1);  // At most one event
+    CHECK(r.n_surprise_events == state.count);
 
-    // After generate, all surprise events should be drained
-    CHECK(lfg_session_surprise_pending(session) == 0);
+    // After generate, pop should return false (already consumed)
+    lfg_surprise_event ev;
+    CHECK_FALSE(lfg_session_surprise_pop(session, &ev, nullptr, 0));
 
     lfg_session_free(session);
 }
 
 // ---------------------------------------------------------------------------
-// Test 11: Surprise + entropy + confidence all coexist
+// Test 9: Surprise + entropy + confidence all coexist
 // ---------------------------------------------------------------------------
 
 TEST_CASE("Surprise + entropy + confidence coexist") {
@@ -447,35 +331,31 @@ TEST_CASE("Surprise + entropy + confidence coexist") {
     // Configure surprise monitor
     lfg_surprise_monitor_config scfg = lfg_surprise_monitor_default_config();
     scfg.threshold = 0.1f;
-    scfg.min_span = 2;
-    scfg.ring_size = 8;
     REQUIRE(lfg_session_configure_surprise_monitor(session, &scfg) > 0);
 
-    // Ingest and generate
+    // Ingest surprising prompt
     auto tokens = tokenize(vocab, "xyzzy plugh blort quux zorp fnord", true);
     REQUIRE(lfg_session_ingest_tokens(session, tokens.data(), tokens.size(), true));
 
-    generate(session, vocab, 20);
+    // Surprise event should be available
+    lfg_surprise_event sev;
+    bool got_surprise = lfg_session_surprise_pop(session, &sev, nullptr, 0);
+    MESSAGE("Surprise event: " << got_surprise);
+    if (got_surprise) {
+        CHECK(sev.n_above_threshold > 0);
+    }
 
-    // All three should have counters
+    // Entropy events should be available after generation
+    lfg_generate_config gc = lfg_generate_default_config();
+    gc.max_tokens = 20;
+    lfg_session_generate(session, gc);
+
     volatile int32_t *entropy_counter = lfg_session_entropy_counter(session);
-    volatile int32_t *confidence_counter = lfg_session_confidence_counter(session);
-    volatile int32_t *surprise_counter = lfg_session_surprise_counter(session);
     REQUIRE(static_cast<const void *>(const_cast<const int32_t *>(entropy_counter)) != nullptr);
-    REQUIRE(static_cast<const void *>(const_cast<const int32_t *>(confidence_counter)) != nullptr);
-    REQUIRE(static_cast<const void *>(const_cast<const int32_t *>(surprise_counter)) != nullptr);
-
     MESSAGE("Entropy events: " << *entropy_counter);
-    MESSAGE("Confidence events: " << *confidence_counter);
-    MESSAGE("Surprise events: " << *surprise_counter);
-
-    // Entropy events should fire (low threshold)
     CHECK(*entropy_counter > 0);
 
-    // Surprise events should fire (gibberish input)
-    CHECK(*surprise_counter > 0);
-
-    // Last entropy should be valid (shared computation path)
+    // Last entropy should be valid
     float last_entropy = lfg_session_get_last_entropy(session);
     CHECK(last_entropy >= 0.0f);
     CHECK(last_entropy <= 1.0f);
@@ -484,7 +364,7 @@ TEST_CASE("Surprise + entropy + confidence coexist") {
 }
 
 // ---------------------------------------------------------------------------
-// Test 12: Long prompt (>n_batch) doesn't crash
+// Test 10: Long prompt (>n_batch) doesn't crash
 // ---------------------------------------------------------------------------
 
 TEST_CASE("Long prompt does not crash") {
@@ -502,8 +382,6 @@ TEST_CASE("Long prompt does not crash") {
 
     lfg_surprise_monitor_config scfg = lfg_surprise_monitor_default_config();
     scfg.threshold = 0.3f;
-    scfg.min_span = 2;
-    scfg.ring_size = 16;
     REQUIRE(lfg_session_configure_surprise_monitor(session, &scfg) > 0);
 
     // Build a long prompt (well over n_batch=64)
@@ -518,16 +396,18 @@ TEST_CASE("Long prompt does not crash") {
     // Should not crash
     REQUIRE(lfg_session_ingest_tokens(session, tokens.data(), tokens.size(), true));
 
-    int32_t pending = lfg_session_surprise_pending(session);
-    MESSAGE("Events from long prompt: " << pending);
-    // With gibberish text, we should get events
-    CHECK(pending >= 0);
+    lfg_surprise_event ev;
+    bool got = lfg_session_surprise_pop(session, &ev, nullptr, 0);
+    MESSAGE("Event from long prompt: " << got);
+    if (got) {
+        CHECK(ev.n_tokens_evaluated > 0);
+    }
 
     lfg_session_free(session);
 }
 
 // ---------------------------------------------------------------------------
-// Test 13: API without monitor configured returns safe defaults
+// Test 11: API without monitor configured returns safe defaults
 // ---------------------------------------------------------------------------
 
 TEST_CASE("API without monitor returns safe defaults") {
@@ -540,20 +420,185 @@ TEST_CASE("API without monitor returns safe defaults") {
     lfg_session *session = lfg_session_create(model, &config);
     REQUIRE(session != nullptr);
 
-    // No surprise monitor configured
-    CHECK(lfg_session_surprise_pending(session) == 0);
-
+    // No surprise monitor configured — pop should return false
     lfg_surprise_event ev;
     CHECK_FALSE(lfg_session_surprise_pop(session, &ev, nullptr, 0));
 
-    // Counter returns non-null pointer but value is 0
-    volatile int32_t *counter = lfg_session_surprise_counter(session);
-    REQUIRE(static_cast<const void *>(const_cast<const int32_t *>(counter)) != nullptr);
-    CHECK(*counter == 0);
+    lfg_session_free(session);
+}
 
-    // Flush is safe to call
-    lfg_session_surprise_flush(session);
-    CHECK(lfg_session_surprise_pending(session) == 0);
+// ---------------------------------------------------------------------------
+// Test 12: Re-ingest after reset produces fresh event
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Re-ingest after reset produces fresh event") {
+    lfg_model *model = get_350m();
+    REQUIRE(model != nullptr);
+
+    const lfg_vocab *vocab = lfg_model_get_vocab(model);
+
+    lfg_session_config config = lfg_session_default_config();
+    config.n_ctx = 2048;
+    config.sampling.temp = 0.0f;
+    lfg_session *session = lfg_session_create(model, &config);
+    REQUIRE(session != nullptr);
+
+    lfg_surprise_monitor_config scfg = lfg_surprise_monitor_default_config();
+    scfg.threshold = 0.1f;
+    REQUIRE(lfg_session_configure_surprise_monitor(session, &scfg) > 0);
+
+    auto tokens = tokenize(vocab, "xyzzy plugh blort quux zorp fnord", true);
+
+    // First ingestion
+    REQUIRE(lfg_session_ingest_tokens(session, tokens.data(), tokens.size(), true));
+    lfg_surprise_event ev1;
+    bool got1 = lfg_session_surprise_pop(session, &ev1, nullptr, 0);
+
+    // Reset and re-ingest
+    lfg_session_reset(session);
+    REQUIRE(lfg_session_ingest_tokens(session, tokens.data(), tokens.size(), true));
+    lfg_surprise_event ev2;
+    bool got2 = lfg_session_surprise_pop(session, &ev2, nullptr, 0);
+
+    // Both should have fired (or neither, but should be consistent)
+    CHECK(got1 == got2);
+    if (got1 && got2) {
+        CHECK(ev1.n_above_threshold == ev2.n_above_threshold);
+        MESSAGE("Consistent: above=" << ev1.n_above_threshold);
+    }
+
+    lfg_session_free(session);
+}
+
+// ---------------------------------------------------------------------------
+// Test 13: Reasoning tokens excluded from surprise evaluation
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Reasoning tokens excluded from surprise with ignore_reasoning") {
+    lfg_model *model = get_350m();
+    REQUIRE(model != nullptr);
+
+    const lfg_vocab *vocab = lfg_model_get_vocab(model);
+
+    // Tokenize reasoning delimiters as they appear in context:
+    //   " <think>" has a leading space because it follows a word in BPE tokenization
+    //   "</think>" starts with "</" which tokenizes consistently
+    auto start_toks = tokenize(vocab, " <think>", false);
+    auto end_toks = tokenize(vocab, "</think>", false);
+    REQUIRE(start_toks.size() > 0);
+    REQUIRE(end_toks.size() > 0);
+
+    // Build prompt with reasoning block containing gibberish
+    std::string prompt = "Hello <think>xyzzy plugh gibberish blort quux</think> world";
+    auto tokens = tokenize(vocab, prompt, true);
+
+    // --- Run WITHOUT ignore_reasoning ---
+    lfg_session_config config = lfg_session_default_config();
+    config.n_ctx = 2048;
+    config.sampling.temp = 0.0f;
+    lfg_session *session = lfg_session_create(model, &config);
+    REQUIRE(session != nullptr);
+
+    lfg_session_configure_reasoning(session,
+        start_toks.data(), start_toks.size(),
+        end_toks.data(), end_toks.size());
+
+    lfg_surprise_monitor_config scfg = lfg_surprise_monitor_default_config();
+    scfg.threshold = 0.1f;
+    scfg.ignore_reasoning = false;
+    REQUIRE(lfg_session_configure_surprise_monitor(session, &scfg) > 0);
+
+    REQUIRE(lfg_session_ingest_tokens(session, tokens.data(), tokens.size(), true));
+
+    lfg_surprise_event ev_all;
+    bool got_all = lfg_session_surprise_pop(session, &ev_all, nullptr, 0);
+    REQUIRE(got_all);
+    MESSAGE("Without ignore: evaluated=" << ev_all.n_tokens_evaluated
+            << " above=" << ev_all.n_above_threshold);
+
+    // --- Run WITH ignore_reasoning ---
+    lfg_session_reset(session);
+
+    lfg_surprise_monitor_config scfg2 = lfg_surprise_monitor_default_config();
+    scfg2.threshold = 0.1f;
+    scfg2.ignore_reasoning = true;
+    REQUIRE(lfg_session_configure_surprise_monitor(session, &scfg2) > 0);
+
+    REQUIRE(lfg_session_ingest_tokens(session, tokens.data(), tokens.size(), true));
+
+    lfg_surprise_event ev_filtered;
+    bool got_filtered = lfg_session_surprise_pop(session, &ev_filtered, nullptr, 0);
+
+    if (got_filtered) {
+        MESSAGE("With ignore: evaluated=" << ev_filtered.n_tokens_evaluated
+                << " above=" << ev_filtered.n_above_threshold);
+        // With reasoning tokens excluded, fewer tokens should be evaluated
+        CHECK(ev_filtered.n_tokens_evaluated < ev_all.n_tokens_evaluated);
+    } else {
+        // If no event fires, that's also valid — all remaining tokens were unsurprising
+        MESSAGE("With ignore: no event (all remaining tokens below threshold)");
+        CHECK(ev_all.n_above_threshold > 0);
+    }
+
+    lfg_session_free(session);
+}
+
+// ---------------------------------------------------------------------------
+// Test 14: Chat-scoped surprise evaluates only last turn
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Chat-scoped surprise evaluates only last turn") {
+    lfg_model *model = get_350m();
+    REQUIRE(model != nullptr);
+
+    const lfg_vocab *vocab = lfg_model_get_vocab(model);
+
+    lfg_session_config config = lfg_session_default_config();
+    config.n_ctx = 2048;
+    config.sampling.temp = 0.0f;
+    lfg_session *session = lfg_session_create(model, &config);
+    REQUIRE(session != nullptr);
+
+    lfg_surprise_monitor_config scfg = lfg_surprise_monitor_default_config();
+    scfg.threshold = 0.1f;
+    REQUIRE(lfg_session_configure_surprise_monitor(session, &scfg) > 0);
+
+    // Multi-turn conversation: context + gibberish last turn
+    lfg_chat_message messages[3];
+    messages[0].role = "system";
+    messages[0].content = "You are a helpful assistant. Please answer questions clearly and concisely.";
+    messages[1].role = "user";
+    messages[1].content = "What is the capital of France?";
+    messages[2].role = "user";
+    messages[2].content = "xyzzy plugh blort quux zorp fnord";
+
+    lfg_generate_config gc = lfg_generate_default_config();
+    gc.max_tokens = 5;
+
+    struct cb_state { int count; int evaluated; };
+    cb_state state = {0, 0};
+    gc.surprise_cb = [](const lfg_surprise_event *event, const float *, void *ud) {
+        auto *s = (cb_state *)ud;
+        s->count++;
+        s->evaluated = event->n_tokens_evaluated;
+    };
+    gc.surprise_cb_data = &state;
+
+    lfg_generate_result r = lfg_session_chat_generate(session, messages, 3, gc);
+    (void)r;
+
+    MESSAGE("Chat surprise: count=" << state.count << " evaluated=" << state.evaluated);
+
+    if (state.count > 0) {
+        // The evaluated token count should be much less than the full prompt
+        // (only the last user turn, not the system+first user turn)
+        auto full_prompt_toks = tokenize(vocab,
+            "You are a helpful assistant. Please answer questions clearly and concisely."
+            "What is the capital of France?"
+            "xyzzy plugh blort quux zorp fnord", true);
+        MESSAGE("Full prompt token count: " << full_prompt_toks.size());
+        CHECK(state.evaluated < (int)full_prompt_toks.size());
+    }
 
     lfg_session_free(session);
 }

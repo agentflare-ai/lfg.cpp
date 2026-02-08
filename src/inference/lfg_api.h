@@ -197,6 +197,7 @@ typedef struct lfg_confidence_monitor_config {
     float    threshold;          // Normalized entropy ceiling (0,1]. Tokens below this are "confident".
     int32_t  min_span;           // Minimum consecutive tokens to emit an event. 0 = default (5).
     int32_t  ring_size;          // Ring buffer slots. 0 = default (4).
+    bool     ignore_reasoning;   // Skip reasoning tokens (treat as run-breaker).
 } lfg_confidence_monitor_config;
 
 // Called when a sustained low-entropy span ends. Receives event + mean-pooled embedding.
@@ -220,44 +221,41 @@ LFG_API int32_t lfg_session_confidence_pending(lfg_session * session);
 LFG_API void    lfg_session_confidence_flush(lfg_session * session);
 LFG_API volatile int32_t * lfg_session_confidence_counter(lfg_session * session);
 
-// --- Surprise Monitor API (input novelty — high-surprise span detection during ingestion) ---
+// --- Surprise Monitor API (input novelty — aggregate surprise during ingestion) ---
 
-// Event emitted when a sustained high-surprise span is detected during prompt ingestion.
+// Single aggregate event produced after prompt ingestion.
+// Summarizes how surprising the entire input was to the model.
 typedef struct lfg_surprise_event {
-    float       mean_surprise;   // Average normalized surprise over the span
-    float       max_surprise;    // Maximum normalized surprise in the span
-    int32_t     span_length;     // Number of consecutive high-surprise tokens
-    int32_t     start_pos;       // Token position at span start
-    int32_t     end_pos;         // Token position at span end
-    int32_t     n_embd;          // Embedding dimension (for embd_out sizing)
+    float       mean_surprise;       // Average normalized surprise across above-threshold tokens
+    float       max_surprise;        // Maximum normalized surprise
+    int32_t     n_above_threshold;   // Count of tokens above threshold
+    int32_t     n_tokens_evaluated;  // Total tokens evaluated (prompt minus BOS)
+    int32_t     n_embd;              // Embedding dimension (for embd_out sizing)
 } lfg_surprise_event;
 
 typedef struct lfg_surprise_monitor_config {
     float    threshold;          // Normalized surprise floor (0,1]. Above = surprising.
-    int32_t  min_span;           // Minimum consecutive tokens for event. 0 = default (3).
-    int32_t  ring_size;          // Ring buffer slots. 0 = default (8).
+    bool     ignore_reasoning;   // Skip reasoning tokens during surprise evaluation.
 } lfg_surprise_monitor_config;
 
-// Called when a sustained high-surprise span is detected during prompt ingestion.
+// Called after prompt ingestion with the aggregate surprise result.
 // Receives event + mean-pooled embedding. Informational only.
 typedef void (*lfg_generate_surprise_cb)(
     const lfg_surprise_event * event, const float * embedding, void * user_data);
 
 LFG_API lfg_surprise_monitor_config lfg_surprise_monitor_default_config(void);
 
-// Configure. Allocates ring buffer + embedding context. Pass NULL to disable.
+// Configure. Allocates embedding buffer + context. Pass NULL to disable.
 // Returns n_embd (> 0) on success, 0 on failure or disable.
 LFG_API int32_t lfg_session_configure_surprise_monitor(
     lfg_session * session, const lfg_surprise_monitor_config * config);
 
-// Pop next pending event. Copies embedding into embd_out. Returns false if none pending.
+// Pop the aggregate surprise event. Returns true once after ingestion
+// (if any tokens exceeded threshold), then false on subsequent calls.
+// Copies embedding into embd_out. Pass NULL for embd_out to skip embedding.
 LFG_API bool lfg_session_surprise_pop(lfg_session * session,
                                        lfg_surprise_event * event_out,
                                        float * embd_out, int32_t embd_cap);
-
-LFG_API int32_t lfg_session_surprise_pending(lfg_session * session);
-LFG_API void    lfg_session_surprise_flush(lfg_session * session);
-LFG_API volatile int32_t * lfg_session_surprise_counter(lfg_session * session);
 
 // --- Embedding API ---
 
@@ -309,7 +307,7 @@ typedef struct lfg_generate_result {
     int32_t          n_tokens;            // Tokens generated
     int32_t          n_retrievals;        // Number of entropy-triggered rewind+inject cycles
     int32_t          n_confidence_spans;  // Number of confidence events fired during generation
-    int32_t          n_surprise_spans;    // Number of surprise events from prompt ingestion
+    int32_t          n_surprise_events;   // 0 or 1 — whether input surprise event was produced
     lfg_stop_reason  stop_reason;         // Why generation stopped
 } lfg_generate_result;
 
