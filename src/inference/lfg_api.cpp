@@ -2499,7 +2499,28 @@ LFG_API lfg_generate_result lfg_session_chat_generate(
     lfg_session_ingest_tokens(session, tokens, n, false);
     free(tokens);
 
-    // 7. Generate
+    // 7. Auto-configure stop sequence for the EOS token's text representation.
+    //    The generate loop already stops on the special EOS token, but small
+    //    models sometimes generate the TEXT version (e.g. "<|im_end|>" spelled
+    //    out as regular tokens) which doesn't trigger EOG detection.  Adding
+    //    the text form as a stop sequence catches both cases.
+    if (session->stop_count == 0) {
+        lfg_token eos = lfg_vocab_eos(vocab);
+        char eos_text[64];
+        int32_t eos_len = lfg_token_to_piece(vocab, eos, eos_text, sizeof(eos_text), 0, true);
+        if (eos_len > 0) {
+            lfg_token eos_toks[32];
+            int32_t n_eos = lfg_tokenize(vocab, eos_text, eos_len,
+                                          eos_toks, 32, false, false);
+            if (n_eos > 0) {
+                const lfg_token *seqs[] = { eos_toks };
+                size_t lens[] = { (size_t)n_eos };
+                lfg_session_configure_stop_sequences(session, seqs, lens, 1);
+            }
+        }
+    }
+
+    // 8. Generate
     return lfg_session_generate(session, config);
 }
 

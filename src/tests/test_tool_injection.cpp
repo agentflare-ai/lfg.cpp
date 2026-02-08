@@ -76,7 +76,7 @@ static bool contains(const std::string &s, const char *sub) {
     return s.find(sub) != std::string::npos;
 }
 
-// Strip <think>...</think> blocks from model output
+// Strip <think>...</think> blocks and <|im_end|> from model output
 static std::string strip_thinking(const std::string &s) {
     auto think_end = s.find("</think>");
     std::string cleaned = s;
@@ -86,6 +86,14 @@ static std::string strip_thinking(const std::string &s) {
     auto im_end = cleaned.find("<|im_end|>");
     if (im_end != std::string::npos && im_end < 5) {
         cleaned = cleaned.substr(im_end + 10);
+    }
+    auto trail = cleaned.rfind("<|im_end|>");
+    if (trail != std::string::npos) {
+        cleaned = cleaned.substr(0, trail);
+    }
+    auto partial = cleaned.rfind("<|im_end");
+    if (partial != std::string::npos && partial > cleaned.size() - 12) {
+        cleaned = cleaned.substr(0, partial);
     }
     auto start = cleaned.find_first_not_of(" \t\n\r");
     if (start == std::string::npos) return "";
