@@ -391,6 +391,14 @@ TEST_CASE("Tool chat: 8-turn conversation with interleaved tool use and chat") {
         MESSAGE("Turn ", total_turns, " (response): ", resp);
         if (!resp.empty()) coherent_responses++;
 
+        // Output must be clean — no leaked stop/turn tokens
+        CHECK_MESSAGE(!contains(resp, "<|im_end|>"),
+            "Turn " << total_turns << " leaked <|im_end|>: " << resp);
+        CHECK_MESSAGE(!contains(resp, "</|im_end|>"),
+            "Turn " << total_turns << " leaked </|im_end|>: " << resp);
+        CHECK_MESSAGE(!contains(resp, "<|im_start|>"),
+            "Turn " << total_turns << " leaked <|im_start|>: " << resp);
+
         stored.push_back(resp);
         history.push_back({"assistant", stored.back().c_str()});
     };
@@ -403,6 +411,14 @@ TEST_CASE("Tool chat: 8-turn conversation with interleaved tool use and chat") {
 
         MESSAGE("Turn ", total_turns, " (chat): ", resp);
         if (!resp.empty()) coherent_responses++;
+
+        // Output must be clean — no leaked stop/turn tokens
+        CHECK_MESSAGE(!contains(resp, "<|im_end|>"),
+            "Turn " << total_turns << " leaked <|im_end|>: " << resp);
+        CHECK_MESSAGE(!contains(resp, "</|im_end|>"),
+            "Turn " << total_turns << " leaked </|im_end|>: " << resp);
+        CHECK_MESSAGE(!contains(resp, "<|im_start|>"),
+            "Turn " << total_turns << " leaked <|im_start|>: " << resp);
 
         if (expect_substr) {
             CHECK_MESSAGE(contains(resp, expect_substr),

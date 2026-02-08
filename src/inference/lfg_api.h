@@ -77,6 +77,16 @@ LFG_API bool lfg_session_configure_stop_sequences(
     const size_t * sequence_lengths,
     size_t n_sequences);
 
+// Configure text-based stop strings. The generate loop matches accumulated
+// output text against these strings and stops when any suffix matches.
+// Unlike token-level stop sequences, text stops are encoding-independent
+// (same text always matches regardless of how the tokenizer splits it).
+// Pass n_strings == 0 to clear. Returns false on invalid arguments.
+LFG_API bool lfg_session_configure_stop_strings(
+    lfg_session * session,
+    const char * const * strings,
+    int32_t n_strings);
+
 // Token ingestion / decoding.
 LFG_API bool lfg_session_ingest_tokens(lfg_session * session,
                                              const lfg_token * tokens,

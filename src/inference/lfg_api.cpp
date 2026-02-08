@@ -140,13 +140,19 @@ struct lfg_session {
     // Generation counting (for max_tokens)
     int32_t generated_count;
 
-    // Stop sequences (flat storage)
+    // Stop sequences (flat token-level storage)
     lfg_token *stop_flat;          // all sequences concatenated
     size_t    *stop_offsets;       // start offset of each sequence
     size_t    *stop_lengths;       // length of each sequence
     size_t     stop_count;         // number of sequences
     size_t     stop_max_len;       // max sequence length (for lookback)
     int32_t    last_stop_len;      // length of last matched stop seq (set by sample)
+
+    // Text-level stop strings (encoding-independent matching)
+    char     **stop_texts;         // malloc'd array of strdup'd strings
+    int32_t   *stop_text_lens;     // length of each string
+    int32_t    stop_text_count;    // number of strings
+    int32_t    stop_text_max_len;  // max string length (for buffer sizing)
 
     // Reasoning state tracking (mirrors old InferenceCore fields)
     bool   in_reasoning;
@@ -777,6 +783,11 @@ LFG_API void lfg_session_free(lfg_session * session) {
     free(session->stop_flat);
     free(session->stop_offsets);
     free(session->stop_lengths);
+    for (int32_t i = 0; i < session->stop_text_count; i++) {
+        free(session->stop_texts[i]);
+    }
+    free(session->stop_texts);
+    free(session->stop_text_lens);
     free(session->pos_buf);
     free(session->logits_buf);
 
@@ -970,6 +981,44 @@ LFG_API bool lfg_session_configure_stop_sequences(
     }
     session->stop_count = count;
     session->stop_max_len = max_len;
+
+    return true;
+}
+
+LFG_API bool lfg_session_configure_stop_strings(
+        lfg_session * session,
+        const char * const * strings,
+        int32_t n_strings) {
+    if (!session) return false;
+
+    // Free old storage
+    for (int32_t i = 0; i < session->stop_text_count; i++) {
+        free(session->stop_texts[i]);
+    }
+    free(session->stop_texts);
+    free(session->stop_text_lens);
+    session->stop_texts = nullptr;
+    session->stop_text_lens = nullptr;
+    session->stop_text_count = 0;
+    session->stop_text_max_len = 0;
+
+    if (n_strings <= 0 || !strings) return true;
+
+    session->stop_texts = (char **)malloc(n_strings * sizeof(char *));
+    session->stop_text_lens = (int32_t *)malloc(n_strings * sizeof(int32_t));
+
+    int32_t count = 0;
+    int32_t max_len = 0;
+    for (int32_t i = 0; i < n_strings; i++) {
+        if (!strings[i] || strings[i][0] == '\0') continue;
+        int32_t len = (int32_t)std::strlen(strings[i]);
+        session->stop_texts[count] = strdup(strings[i]);
+        session->stop_text_lens[count] = len;
+        if (len > max_len) max_len = len;
+        count++;
+    }
+    session->stop_text_count = count;
+    session->stop_text_max_len = max_len;
 
     return true;
 }
@@ -2187,11 +2236,10 @@ LFG_API lfg_generate_result lfg_session_generate(
     }
 
     // -----------------------------------------------------------------------
-    // Stop-sequence look-ahead buffer.
-    // When multi-token stop sequences are configured, we hold back the last
-    // (stop_max_len - 1) tokens before emitting them through the callback.
-    // When sample() fires a stop sequence, the buffer contains up to
-    // (last_stop_len - 1) prefix tokens that must be suppressed.
+    // Stop look-ahead buffer (token-level + text-level).
+    // Holds back the last N tokens before emitting them through the callback.
+    // Token-level: suppresses prefix tokens when sample() fires a stop seq.
+    // Text-level: matches accumulated piece text against stop strings.
     // -----------------------------------------------------------------------
     struct stop_slot {
         lfg_token token;
@@ -2199,13 +2247,19 @@ LFG_API lfg_generate_result lfg_session_generate(
         char      piece[256];
     };
 
-    int32_t stop_buf_cap = (session->stop_max_len > 1 && config.token_cb)
+    // Buffer capacity: max of token-level need and text-level need
+    int32_t tok_buf_need = (session->stop_max_len > 1)
         ? (int32_t)(session->stop_max_len - 1) : 0;
+    int32_t txt_buf_need = session->stop_text_max_len;  // worst case: 1 char/token
+    int32_t stop_buf_cap = (tok_buf_need > txt_buf_need) ? tok_buf_need : txt_buf_need;
+    if (!config.token_cb) stop_buf_cap = 0;
+
     stop_slot *stop_buf = nullptr;
     int32_t stop_buf_count = 0;
 
     if (stop_buf_cap > 0) {
-        stop_buf = (stop_slot *)alloca(stop_buf_cap * sizeof(stop_slot));
+        // Allocate cap+1 slots for push-before-emit ordering
+        stop_buf = (stop_slot *)alloca((stop_buf_cap + 1) * sizeof(stop_slot));
     }
 
     session->last_stop_len = 0;
@@ -2291,14 +2345,85 @@ LFG_API lfg_generate_result lfg_session_generate(
 
         result.n_tokens = i + 1;
 
-        // Token callback with stop-sequence look-ahead buffering
+        // Token callback with stop look-ahead buffering (token + text level)
         if (stop_buf_cap > 0) {
             // Convert token to piece text
             int32_t n = lfg_token_to_piece(vocab, tok, piece_buf, sizeof(piece_buf), 0, false);
             if (n < 0) n = 0;
 
-            // If buffer full, emit oldest token (confirmed safe — not part of stop seq)
-            if (stop_buf_count == stop_buf_cap) {
+            // Push new token into buffer (may temporarily exceed cap)
+            stop_buf[stop_buf_count].token = tok;
+            stop_buf[stop_buf_count].piece_len = n;
+            std::memcpy(stop_buf[stop_buf_count].piece, piece_buf, n);
+            stop_buf[stop_buf_count].piece[n] = '\0';
+            stop_buf_count++;
+
+            // Text-level stop matching: check if buffered text contains any stop string.
+            // Uses strstr (not suffix match) because BPE tokens can include trailing
+            // characters after the stop text (e.g. ">\n" instead of just ">").
+            if (session->stop_text_count > 0) {
+                // Concatenate piece texts from buffer
+                char match_buf[1024];
+                int32_t match_len = 0;
+                for (int32_t j = 0; j < stop_buf_count && match_len < (int32_t)sizeof(match_buf) - 256; j++) {
+                    std::memcpy(match_buf + match_len, stop_buf[j].piece, stop_buf[j].piece_len);
+                    match_len += stop_buf[j].piece_len;
+                }
+                match_buf[match_len] = '\0';
+
+                for (int32_t s = 0; s < session->stop_text_count; s++) {
+                    const char *found = std::strstr(match_buf, session->stop_texts[s]);
+                    if (!found) continue;
+
+                    // Stop string found — emit tokens before it, discard from it onward
+                    int32_t emit_chars = (int32_t)(found - match_buf);
+
+                    // Find token boundary: count whole tokens that fit before emit_chars
+                    int32_t chars_so_far = 0;
+                    int32_t flush_n = 0;
+                    for (int32_t j = 0; j < stop_buf_count; j++) {
+                        if (chars_so_far + stop_buf[j].piece_len <= emit_chars) {
+                            chars_so_far += stop_buf[j].piece_len;
+                            flush_n = j + 1;
+                        } else {
+                            break;
+                        }
+                    }
+
+                    // Flush safe whole tokens
+                    for (int32_t j = 0; j < flush_n && !stopped; j++) {
+                        lfg_generate_action action = config.token_cb(
+                            stop_buf[j].token, stop_buf[j].piece,
+                            stop_buf[j].piece_len, config.token_cb_data);
+                        if (action == LFG_GENERATE_STOP) {
+                            result.stop_reason = LFG_STOP_CALLBACK;
+                            stopped = true;
+                        }
+                    }
+
+                    // Emit safe prefix of partially-matched boundary token
+                    if (!stopped && flush_n < stop_buf_count && chars_so_far < emit_chars) {
+                        int32_t safe_chars = emit_chars - chars_so_far;
+                        lfg_generate_action action = config.token_cb(
+                            stop_buf[flush_n].token,
+                            stop_buf[flush_n].piece,
+                            safe_chars, config.token_cb_data);
+                        if (action == LFG_GENERATE_STOP) {
+                            result.stop_reason = LFG_STOP_CALLBACK;
+                            stopped = true;
+                        }
+                    }
+
+                    if (!stopped) result.stop_reason = LFG_STOP_EOS;
+                    stopped = true;
+                    stop_buf_count = 0;
+                    break;
+                }
+                if (stopped) break;
+            }
+
+            // If buffer exceeds capacity, emit oldest token (confirmed safe)
+            while (stop_buf_count > stop_buf_cap) {
                 lfg_generate_action action = config.token_cb(
                     stop_buf[0].token, stop_buf[0].piece,
                     stop_buf[0].piece_len, config.token_cb_data);
@@ -2307,20 +2432,13 @@ LFG_API lfg_generate_result lfg_session_generate(
                     stopped = true;
                     break;
                 }
-                // Shift buffer left by one
                 if (stop_buf_count > 1) {
                     std::memmove(stop_buf, stop_buf + 1,
                                  (stop_buf_count - 1) * sizeof(stop_slot));
                 }
                 stop_buf_count--;
             }
-
-            // Push new token into buffer
-            stop_buf[stop_buf_count].token = tok;
-            stop_buf[stop_buf_count].piece_len = n;
-            std::memcpy(stop_buf[stop_buf_count].piece, piece_buf, n);
-            stop_buf[stop_buf_count].piece[n] = '\0';
-            stop_buf_count++;
+            if (stopped) break;
         } else if (config.token_cb) {
             // No buffering needed — emit directly
             int32_t n = lfg_token_to_piece(vocab, tok, piece_buf, sizeof(piece_buf), 0, false);
@@ -2591,23 +2709,32 @@ LFG_API lfg_generate_result lfg_session_chat_generate(
     lfg_session_ingest_tokens(session, tokens, n, false);
     free(tokens);
 
-    // 7. Auto-configure stop sequence for the EOS token's text representation.
+    // 7. Auto-configure text stop string for the EOS token's text representation.
     //    The generate loop already stops on the special EOS token, but small
     //    models sometimes generate the TEXT version (e.g. "<|im_end|>" spelled
-    //    out as regular tokens) which doesn't trigger EOG detection.  Adding
-    //    the text form as a stop sequence catches both cases.
-    if (session->stop_count == 0) {
+    //    out as regular tokens) which doesn't trigger EOG detection.  Using a
+    //    text-level stop string catches the text form regardless of how the
+    //    tokenizer splits it.
+    if (session->stop_text_count == 0) {
         lfg_token eos = lfg_vocab_eos(vocab);
         char eos_text[64];
         int32_t eos_len = lfg_token_to_piece(vocab, eos, eos_text, sizeof(eos_text), 0, true);
         if (eos_len > 0) {
-            lfg_token eos_toks[32];
-            int32_t n_eos = lfg_tokenize(vocab, eos_text, eos_len,
-                                          eos_toks, 32, false, false);
-            if (n_eos > 0) {
-                const lfg_token *seqs[] = { eos_toks };
-                size_t lens[] = { (size_t)n_eos };
-                lfg_session_configure_stop_sequences(session, seqs, lens, 1);
+            eos_text[eos_len] = '\0';
+            // Models sometimes generate a "closing tag" variant of the EOS
+            // token text, e.g. "</|im_end|>" instead of "<|im_end|>".  Add
+            // both variants so the text stop catches either form.
+            if (eos_text[0] == '<' && eos_len + 1 < (int32_t)sizeof(eos_text)) {
+                char close_text[66];
+                close_text[0] = '<';
+                close_text[1] = '/';
+                std::memcpy(close_text + 2, eos_text + 1, eos_len - 1);
+                close_text[eos_len + 1] = '\0';
+                const char *strs[] = { eos_text, close_text };
+                lfg_session_configure_stop_strings(session, strs, 2);
+            } else {
+                const char *strs[] = { eos_text };
+                lfg_session_configure_stop_strings(session, strs, 1);
             }
         }
     }
