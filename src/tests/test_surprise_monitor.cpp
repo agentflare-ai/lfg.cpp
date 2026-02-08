@@ -474,7 +474,7 @@ TEST_CASE("Re-ingest after reset produces fresh event") {
 // Test 13: Reasoning tokens excluded from surprise evaluation
 // ---------------------------------------------------------------------------
 
-TEST_CASE("Reasoning tokens excluded from surprise with ignore_reasoning") {
+TEST_CASE("Reasoning tokens excluded from surprise by default") {
     lfg_model *model = get_350m();
     REQUIRE(model != nullptr);
 
@@ -492,7 +492,7 @@ TEST_CASE("Reasoning tokens excluded from surprise with ignore_reasoning") {
     std::string prompt = "Hello <think>xyzzy plugh gibberish blort quux</think> world";
     auto tokens = tokenize(vocab, prompt, true);
 
-    // --- Run WITHOUT ignore_reasoning ---
+    // --- Run WITH include_reasoning = true (evaluate everything) ---
     lfg_session_config config = lfg_session_default_config();
     config.n_ctx = 2048;
     config.sampling.temp = 0.0f;
@@ -505,7 +505,7 @@ TEST_CASE("Reasoning tokens excluded from surprise with ignore_reasoning") {
 
     lfg_surprise_monitor_config scfg = lfg_surprise_monitor_default_config();
     scfg.threshold = 0.1f;
-    scfg.ignore_reasoning = false;
+    scfg.include_reasoning = true;
     REQUIRE(lfg_session_configure_surprise_monitor(session, &scfg) > 0);
 
     REQUIRE(lfg_session_ingest_tokens(session, tokens.data(), tokens.size(), true));
@@ -513,15 +513,15 @@ TEST_CASE("Reasoning tokens excluded from surprise with ignore_reasoning") {
     lfg_surprise_event ev_all;
     bool got_all = lfg_session_surprise_pop(session, &ev_all, nullptr, 0);
     REQUIRE(got_all);
-    MESSAGE("Without ignore: evaluated=" << ev_all.n_tokens_evaluated
+    MESSAGE("With include_reasoning: evaluated=" << ev_all.n_tokens_evaluated
             << " above=" << ev_all.n_above_threshold);
 
-    // --- Run WITH ignore_reasoning ---
+    // --- Run with default (include_reasoning = false, skip reasoning) ---
     lfg_session_reset(session);
 
     lfg_surprise_monitor_config scfg2 = lfg_surprise_monitor_default_config();
     scfg2.threshold = 0.1f;
-    scfg2.ignore_reasoning = true;
+    // include_reasoning defaults to false — reasoning tokens skipped
     REQUIRE(lfg_session_configure_surprise_monitor(session, &scfg2) > 0);
 
     REQUIRE(lfg_session_ingest_tokens(session, tokens.data(), tokens.size(), true));

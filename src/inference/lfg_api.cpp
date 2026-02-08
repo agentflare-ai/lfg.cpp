@@ -235,12 +235,12 @@ struct lfg_session {
     int32_t                   confidence_n_embd;
 
     // Confidence reasoning gating
-    bool                 confidence_ignore_reasoning;
+    bool                 confidence_include_reasoning;
 
     // Surprise monitor (input novelty — single aggregate event per ingestion)
     float                surprise_threshold;
     bool                 surprise_active;
-    bool                 surprise_ignore_reasoning;
+    bool                 surprise_include_reasoning;
     int32_t              surprise_skip_tokens;  // tokens to skip at start of next ingestion (chat context)
 
     // Accumulator (filled during ingestion, read via pop)
@@ -609,7 +609,7 @@ static bool session_ingest_internal(lfg_session *s, const lfg_token *tokens, siz
 
     // Pre-scan reasoning state for surprise gating (needs full token view before batching)
     bool *reasoning_map = nullptr;
-    if (s->surprise_active && s->surprise_ignore_reasoning &&
+    if (s->surprise_active && !s->surprise_include_reasoning &&
         (s->reasoning_start_count > 0 || s->reasoning_end_count > 0)) {
         reasoning_map = build_reasoning_map(s, tokens, n_tokens);
     }
@@ -672,7 +672,7 @@ static bool session_ingest_internal(lfg_session *s, const lfg_token *tokens, siz
 
                 size_t next_idx = i + (size_t)p + 1;
 
-                // Skip reasoning tokens when ignore_reasoning is set
+                // Skip reasoning tokens when include_reasoning is false
                 if (reasoning_map && reasoning_map[next_idx]) continue;
 
                 // Skip chat context prefix tokens (chat-scoped surprise)
@@ -885,7 +885,7 @@ LFG_API lfg_session * lfg_session_create(lfg_model * model, const lfg_session_co
     s->confidence_threshold = 0.0f;
     s->confidence_min_span = 5;
     s->confidence_active = false;
-    s->confidence_ignore_reasoning = false;
+    s->confidence_include_reasoning = false;
     s->confidence_run_count = 0;
     s->confidence_run_entropy_sum = 0.0f;
     s->confidence_run_min_entropy = 1.0f;
@@ -900,7 +900,7 @@ LFG_API lfg_session * lfg_session_create(lfg_model * model, const lfg_session_co
     // Surprise monitor (all zero — allocated in configure_surprise_monitor)
     s->surprise_threshold = 0.0f;
     s->surprise_active = false;
-    s->surprise_ignore_reasoning = false;
+    s->surprise_include_reasoning = false;
     s->surprise_skip_tokens = 0;
     s->surprise_count = 0;
     s->surprise_sum = 0.0f;
@@ -1461,7 +1461,7 @@ LFG_API lfg_token lfg_session_sample(lfg_session * session) {
         // Hot path is O(1): only accumulate run stats + write event metadata.
         // Embedding is computed lazily in pop(), not here.
         if (session->confidence_active) {
-            bool conf_skip = session->confidence_ignore_reasoning && session->in_reasoning;
+            bool conf_skip = !session->confidence_include_reasoning && session->in_reasoning;
             if (!conf_skip && norm <= session->confidence_threshold) {
                 // Extend run
                 if (session->confidence_run_count == 0) {
@@ -2249,7 +2249,7 @@ LFG_API int32_t lfg_session_configure_confidence_monitor(
     session->confidence_run_entropy_sum = 0.0f;
     session->confidence_run_min_entropy = 1.0f;
     session->confidence_run_start_pos   = 0;
-    session->confidence_ignore_reasoning = config->ignore_reasoning;
+    session->confidence_include_reasoning = config->include_reasoning;
     session->confidence_active       = true;
 
     return n_embd;
@@ -2347,7 +2347,7 @@ LFG_API int32_t lfg_session_configure_surprise_monitor(
     session->surprise_n_evaluated  = 0;
     session->surprise_ready        = false;
     session->surprise_popped       = false;
-    session->surprise_ignore_reasoning = config->ignore_reasoning;
+    session->surprise_include_reasoning = config->include_reasoning;
     session->surprise_skip_tokens  = 0;
     session->surprise_active       = true;
 

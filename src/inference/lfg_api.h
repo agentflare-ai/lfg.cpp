@@ -197,7 +197,7 @@ typedef struct lfg_confidence_monitor_config {
     float    threshold;          // Normalized entropy ceiling (0,1]. Tokens below this are "confident".
     int32_t  min_span;           // Minimum consecutive tokens to emit an event. 0 = default (5).
     int32_t  ring_size;          // Ring buffer slots. 0 = default (4).
-    bool     ignore_reasoning;   // Skip reasoning tokens (treat as run-breaker).
+    bool     include_reasoning;  // false (default) = skip reasoning tokens; true = include them.
 } lfg_confidence_monitor_config;
 
 // Called when a sustained low-entropy span ends. Receives event + mean-pooled embedding.
@@ -235,7 +235,7 @@ typedef struct lfg_surprise_event {
 
 typedef struct lfg_surprise_monitor_config {
     float    threshold;          // Normalized surprise floor (0,1]. Above = surprising.
-    bool     ignore_reasoning;   // Skip reasoning tokens during surprise evaluation.
+    bool     include_reasoning;  // false (default) = skip reasoning tokens; true = include them.
 } lfg_surprise_monitor_config;
 
 // Called after prompt ingestion with the aggregate surprise result.
