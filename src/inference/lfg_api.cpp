@@ -1050,78 +1050,92 @@ LFG_API bool lfg_session_ingest_tokens(lfg_session * session,
     return session_ingest_internal(session, tokens + split_idx, 1, update_sampler);
 }
 
+// Rank registered tools against a pre-computed query embedding and build the
+// <tools>...</tools> XML block into session->tool_xml_buf.
+// query_embd must be L2-normalized, length = session->tool_n_embd.
+// Returns the XML text length written, or 0 if no tools / ranking failed.
+static int32_t session_rank_and_format_tools(lfg_session *session, const float *query_embd) {
+    if (!session || session->tool_count <= 0 || session->tool_top_k <= 0) return 0;
+
+    int32_t n_embd = session->tool_n_embd;
+
+    // Cosine similarity (vectors are L2-normalized, so dot product = cosine)
+    for (int32_t i = 0; i < session->tool_count; ++i) {
+        float dot = 0.0f;
+        const float *te = session->tool_entries[i].embedding;
+        for (int j = 0; j < n_embd; ++j) dot += query_embd[j] * te[j];
+        session->tool_scores[i] = dot;
+        session->tool_score_indices[i] = i;
+    }
+
+    // Sort indices by descending score (insertion sort — tool_count is small)
+    for (int32_t i = 1; i < session->tool_count; ++i) {
+        int32_t key_idx = session->tool_score_indices[i];
+        float key_score = session->tool_scores[key_idx];
+        int32_t j = i - 1;
+        while (j >= 0 && session->tool_scores[session->tool_score_indices[j]] < key_score) {
+            session->tool_score_indices[j + 1] = session->tool_score_indices[j];
+            j--;
+        }
+        session->tool_score_indices[j + 1] = key_idx;
+    }
+
+    // Log ranking
+    for (int32_t i = 0; i < session->tool_count; ++i) {
+        int32_t idx = session->tool_score_indices[i];
+        LFG_LOG_DEBUG("tool_rank[%d]: %s score=%.6f",
+                      i, session->tool_entries[idx].name,
+                      session->tool_scores[idx]);
+    }
+
+    // Build XML block with top_k tools into pre-allocated buffer
+    int32_t k = session->tool_top_k;
+    if (k > session->tool_count) k = session->tool_count;
+    int32_t xml_len = 0;
+
+    const char *header = "<tools>\n";
+    const char *footer = "</tools>\n";
+    int32_t header_len = 8;
+    int32_t footer_len = 9;
+
+    std::memcpy(session->tool_xml_buf + xml_len, header, header_len);
+    xml_len += header_len;
+
+    for (int32_t i = 0; i < k; ++i) {
+        auto &tool = session->tool_entries[session->tool_score_indices[i]];
+        std::memcpy(session->tool_xml_buf + xml_len, tool.xml_text, tool.xml_text_len);
+        xml_len += tool.xml_text_len;
+    }
+
+    std::memcpy(session->tool_xml_buf + xml_len, footer, footer_len);
+    xml_len += footer_len;
+    session->tool_xml_buf[xml_len] = '\0';
+
+    LFG_LOG_DEBUG("tool_inject: top_k=%d xml_len=%d", k, xml_len);
+
+    return xml_len;
+}
+
 LFG_API bool lfg_session_decode(lfg_session * session) {
     if (!session) return false;
 
-    // Tool ranking and injection (only on first decode when tools are registered)
+    // Tool ranking and injection for low-level API users (ingest + decode + sample).
+    // For chat_generate / prompt_generate, tools are already injected into the
+    // prompt text before tokenization, so tools_injected is already true.
     if (session->tool_count > 0 && !session->tools_injected && session->tool_top_k > 0) {
-        int32_t n_embd = session->tool_n_embd;
         bool got_query_embd = compute_query_embedding(session, session->tool_query_embd);
 
         if (got_query_embd) {
-            // Compute cosine similarity into pre-allocated arrays
-            for (int32_t i = 0; i < session->tool_count; ++i) {
-                float dot = 0.0f;
-                const float *te = session->tool_entries[i].embedding;
-                const float *qe = session->tool_query_embd;
-                for (int j = 0; j < n_embd; ++j) dot += qe[j] * te[j];
-                session->tool_scores[i] = dot;
-                session->tool_score_indices[i] = i;
-            }
+            int32_t xml_len = session_rank_and_format_tools(session, session->tool_query_embd);
 
-            // Sort indices by descending score (insertion sort — tool_count is small)
-            for (int32_t i = 1; i < session->tool_count; ++i) {
-                int32_t key_idx = session->tool_score_indices[i];
-                float key_score = session->tool_scores[key_idx];
-                int32_t j = i - 1;
-                while (j >= 0 && session->tool_scores[session->tool_score_indices[j]] < key_score) {
-                    session->tool_score_indices[j + 1] = session->tool_score_indices[j];
-                    j--;
+            if (xml_len > 0) {
+                const lfg_vocab *vocab = lfg_model_get_vocab(session->model);
+                int32_t n_tok = lfg_tokenize(vocab, session->tool_xml_buf, xml_len,
+                                             session->tool_token_buf, session->tool_token_buf_cap,
+                                             false, false);
+                if (n_tok > 0) {
+                    lfg_session_ingest_tokens(session, session->tool_token_buf, n_tok, false);
                 }
-                session->tool_score_indices[j + 1] = key_idx;
-            }
-
-            // Log ranking
-            for (int32_t i = 0; i < session->tool_count; ++i) {
-                int32_t idx = session->tool_score_indices[i];
-                LFG_LOG_DEBUG("tool_rank[%d]: %s score=%.6f",
-                              i, session->tool_entries[idx].name,
-                              session->tool_scores[idx]);
-            }
-
-            // Build XML block with top_k tools into pre-allocated buffer
-            int32_t k = session->tool_top_k;
-            if (k > session->tool_count) k = session->tool_count;
-            int32_t xml_len = 0;
-
-            const char *header = "<tools>\n";
-            const char *footer = "</tools>\n";
-            int32_t header_len = 8;
-            int32_t footer_len = 9;
-
-            std::memcpy(session->tool_xml_buf + xml_len, header, header_len);
-            xml_len += header_len;
-
-            for (int32_t i = 0; i < k; ++i) {
-                auto &tool = session->tool_entries[session->tool_score_indices[i]];
-                std::memcpy(session->tool_xml_buf + xml_len, tool.xml_text, tool.xml_text_len);
-                xml_len += tool.xml_text_len;
-            }
-
-            std::memcpy(session->tool_xml_buf + xml_len, footer, footer_len);
-            xml_len += footer_len;
-            session->tool_xml_buf[xml_len] = '\0';
-
-            // Tokenize into pre-allocated token buffer
-            const lfg_vocab *vocab = lfg_model_get_vocab(session->model);
-            int32_t n_tok = lfg_tokenize(vocab, session->tool_xml_buf, xml_len,
-                                         session->tool_token_buf, session->tool_token_buf_cap,
-                                         false, false);
-
-            LFG_LOG_DEBUG("tool_inject: top_k=%d n_tok=%d", k, n_tok);
-
-            if (n_tok > 0) {
-                lfg_session_ingest_tokens(session, session->tool_token_buf, n_tok, false);
             }
         }
 
@@ -2292,15 +2306,46 @@ LFG_API lfg_generate_result lfg_session_prompt_generate(
     lfg_generate_result result{};
     if (!session || !prompt || prompt_len <= 0) return result;
 
+    // Tool injection: rank tools and prepend XML to the prompt text so tools
+    // appear inside the prompt context, not between prompt and generated output.
+    const char *effective_prompt = prompt;
+    int32_t effective_len = prompt_len;
+    char *combined_prompt = nullptr;
+
+    if (session->tool_count > 0 && !session->tools_injected && session->tool_top_k > 0) {
+        int32_t n_embd = session->tool_n_embd;
+        int32_t got = lfg_session_embed(session, prompt, prompt_len,
+                                         session->tool_query_embd, n_embd);
+        if (got > 0) {
+            int32_t xml_len = session_rank_and_format_tools(session, session->tool_query_embd);
+            if (xml_len > 0) {
+                // Prepend tool XML + newline to prompt
+                int32_t combined_len = xml_len + 1 + prompt_len;
+                combined_prompt = (char *)malloc(combined_len + 1);
+                std::memcpy(combined_prompt, session->tool_xml_buf, xml_len);
+                combined_prompt[xml_len] = '\n';
+                std::memcpy(combined_prompt + xml_len + 1, prompt, prompt_len);
+                combined_prompt[combined_len] = '\0';
+
+                effective_prompt = combined_prompt;
+                effective_len = combined_len;
+            }
+        }
+
+        session->tools_injected = true;
+    }
+
     const lfg_vocab *vocab = lfg_model_get_vocab(session->model);
-    int32_t tok_cap = prompt_len + 16;
+    int32_t tok_cap = effective_len + 16;
     lfg_token *tokens = (lfg_token *)malloc(tok_cap * sizeof(lfg_token));
-    int32_t n = lfg_tokenize(vocab, prompt, prompt_len, tokens, tok_cap, add_bos, false);
+    int32_t n = lfg_tokenize(vocab, effective_prompt, effective_len, tokens, tok_cap, add_bos, false);
     if (n < 0) {
         tok_cap = -n;
         tokens = (lfg_token *)realloc(tokens, tok_cap * sizeof(lfg_token));
-        n = lfg_tokenize(vocab, prompt, prompt_len, tokens, tok_cap, add_bos, false);
+        n = lfg_tokenize(vocab, effective_prompt, effective_len, tokens, tok_cap, add_bos, false);
     }
+
+    free(combined_prompt);
 
     if (n <= 0) {
         free(tokens);
@@ -2326,12 +2371,98 @@ LFG_API lfg_generate_result lfg_session_chat_generate(
     lfg_generate_result result{};
     if (!session || !messages || n_messages == 0) return result;
 
-    // 1. Detect chat template from model metadata
+    // 1. Tool injection: rank tools and build XML to inject into the system message.
+    //    This must happen BEFORE template application so the tools appear inside
+    //    the prompt (system message), not between the prompt and generated output.
+    int32_t tool_xml_len = 0;
+    char *tool_xml_text = nullptr;
+
+    if (session->tool_count > 0 && !session->tools_injected && session->tool_top_k > 0) {
+        // Find last user message for query embedding
+        const char *query_text = nullptr;
+        int32_t query_len = 0;
+        for (int i = (int)n_messages - 1; i >= 0; --i) {
+            if (messages[i].role && std::strcmp(messages[i].role, "user") == 0) {
+                query_text = messages[i].content;
+                query_len = query_text ? (int32_t)std::strlen(query_text) : 0;
+                break;
+            }
+        }
+
+        if (query_text && query_len > 0) {
+            int32_t n_embd = session->tool_n_embd;
+            int32_t got = lfg_session_embed(session, query_text, query_len,
+                                             session->tool_query_embd, n_embd);
+            if (got > 0) {
+                tool_xml_len = session_rank_and_format_tools(session, session->tool_query_embd);
+                if (tool_xml_len > 0) {
+                    tool_xml_text = session->tool_xml_buf;
+                }
+            }
+        }
+
+        session->tools_injected = true;
+    }
+
+    // 2. Build message array with tools injected into the system message
+    const lfg_chat_message *tmpl_msgs = messages;
+    size_t tmpl_n = n_messages;
+
+    // Temporary storage for modified messages (only allocated if tools present)
+    lfg_chat_message *mod_msgs = nullptr;
+    char *sys_content_buf = nullptr;
+
+    if (tool_xml_text && tool_xml_len > 0) {
+        // Find existing system message
+        int sys_idx = -1;
+        for (size_t i = 0; i < n_messages; ++i) {
+            if (messages[i].role && std::strcmp(messages[i].role, "system") == 0) {
+                sys_idx = (int)i;
+                break;
+            }
+        }
+
+        if (sys_idx >= 0) {
+            // Append tool XML to existing system message
+            const char *orig = messages[sys_idx].content ? messages[sys_idx].content : "";
+            size_t orig_len = std::strlen(orig);
+            size_t buf_len = orig_len + 2 + tool_xml_len + 1;
+            sys_content_buf = (char *)malloc(buf_len);
+            int written = std::snprintf(sys_content_buf, buf_len, "%s\n\n%.*s",
+                                        orig, (int)tool_xml_len, tool_xml_text);
+            sys_content_buf[written] = '\0';
+
+            mod_msgs = (lfg_chat_message *)malloc(n_messages * sizeof(lfg_chat_message));
+            std::memcpy(mod_msgs, messages, n_messages * sizeof(lfg_chat_message));
+            mod_msgs[sys_idx].content = sys_content_buf;
+
+            tmpl_msgs = mod_msgs;
+            tmpl_n = n_messages;
+        } else {
+            // Insert a new system message at the beginning with the tool XML
+            size_t new_n = n_messages + 1;
+            sys_content_buf = (char *)malloc(tool_xml_len + 1);
+            std::memcpy(sys_content_buf, tool_xml_text, tool_xml_len);
+            sys_content_buf[tool_xml_len] = '\0';
+
+            mod_msgs = (lfg_chat_message *)malloc(new_n * sizeof(lfg_chat_message));
+            mod_msgs[0].role = "system";
+            mod_msgs[0].content = sys_content_buf;
+            std::memcpy(mod_msgs + 1, messages, n_messages * sizeof(lfg_chat_message));
+
+            tmpl_msgs = mod_msgs;
+            tmpl_n = new_n;
+        }
+    }
+
+    // 3. Detect chat template from model metadata
     const char *tmpl_str = lfg_model_chat_template(session->model, nullptr);
 
-    // 2. Apply template: first call with NULL buf to get required size
-    int32_t needed = lfg_chat_apply_template(tmpl_str, messages, n_messages, true, nullptr, 0);
+    // 4. Apply template: first call with NULL buf to get required size
+    int32_t needed = lfg_chat_apply_template(tmpl_str, tmpl_msgs, tmpl_n, true, nullptr, 0);
     if (needed <= 0) {
+        free(mod_msgs);
+        free(sys_content_buf);
         lfg_set_last_error(LFG_ERROR_INVALID_ARGUMENT,
             "%s: chat template failed (unknown template?)", __func__);
         return result;
@@ -2339,10 +2470,13 @@ LFG_API lfg_generate_result lfg_session_chat_generate(
 
     // Allocate and format
     char *formatted = (char *)malloc(needed + 1);
-    lfg_chat_apply_template(tmpl_str, messages, n_messages, true, formatted, needed + 1);
+    lfg_chat_apply_template(tmpl_str, tmpl_msgs, tmpl_n, true, formatted, needed + 1);
     formatted[needed] = '\0';
 
-    // 3. Tokenize
+    free(mod_msgs);
+    free(sys_content_buf);
+
+    // 5. Tokenize
     const lfg_vocab *vocab = lfg_model_get_vocab(session->model);
     int32_t tok_cap = needed + 16;
     lfg_token *tokens = (lfg_token *)malloc(tok_cap * sizeof(lfg_token));
@@ -2361,11 +2495,11 @@ LFG_API lfg_generate_result lfg_session_chat_generate(
         return result;
     }
 
-    // 4. Ingest prompt — update_sampler=false so grammar isn't fed prompt tokens
+    // 6. Ingest prompt — update_sampler=false so grammar isn't fed prompt tokens
     lfg_session_ingest_tokens(session, tokens, n, false);
     free(tokens);
 
-    // 5. Generate
+    // 7. Generate
     return lfg_session_generate(session, config);
 }
 

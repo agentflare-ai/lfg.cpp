@@ -857,6 +857,8 @@ fn addTests(
         "test_confidence_monitor",
         "test_generate_loop",
         "test_structured_generate",
+        "test_chat_integration",
+        "test_tool_injection",
     };
 
     const test_files = [_][]const u8{
@@ -892,6 +894,8 @@ fn addTests(
         "src/tests/test_confidence_monitor.cpp",
         "src/tests/test_generate_loop.cpp",
         "src/tests/test_structured_generate.cpp",
+        "src/tests/test_chat_integration.cpp",
+        "src/tests/test_tool_injection.cpp",
     };
 
     var test_step = b.step("test", "Build and run tests");
