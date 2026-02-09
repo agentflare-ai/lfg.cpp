@@ -18,6 +18,8 @@ pub fn build(b: *std.Build) void {
     // SPDLOG log levels: 0=TRACE, 1=DEBUG, 2=INFO, 3=WARN, 4=ERROR, 5=CRITICAL, 6=OFF
     const spdlog_level = b.option(u32, "spdlog_level", "SPDLOG_ACTIVE_LEVEL (0-6, default 4=ERROR)") orelse 4;
 
+    const build_demo = b.option(bool, "demo", "Build ImGui demo application") orelse false;
+
     const spdlog_dep = b.dependency("spdlog", .{});
     const spdlog_include = spdlog_dep.path("include");
 
@@ -66,6 +68,7 @@ pub fn build(b: *std.Build) void {
                 windows_shared,
                 false,
                 true,
+                false,
             );
         }
     } else {
@@ -88,6 +91,7 @@ pub fn build(b: *std.Build) void {
             windows_shared,
             true,
             false,
+            build_demo,
         );
     }
 }
@@ -111,6 +115,7 @@ fn addTargetArtifacts(
     windows_shared: bool,
     build_tools: bool,
     multi_target: bool,
+    build_demo: bool,
 ) void {
     var effective_target = target;
     if (target.result.os.tag == .macos and target.result.cpu.arch == .aarch64) {
@@ -156,7 +161,7 @@ fn addTargetArtifacts(
     const lfg_core = addLiquidCore(b, effective_target, optimize, ggml, lfg_vision, spdlog_include, spdlog_level, cxx_flags_slice, framework_path, private_framework_path);
 
     if (build_tools) {
-        addExecutables(b, effective_target, optimize, ggml, llama_core, lfg_vision, lfg_core, spdlog_include, cxx_flags_slice, framework_path, private_framework_path, sysroot);
+        addExecutables(b, effective_target, optimize, ggml, llama_core, lfg_vision, lfg_core, spdlog_include, cxx_flags_slice, c_flags_slice, framework_path, private_framework_path, sysroot, build_demo);
         b.installArtifact(ggml);
         b.installArtifact(llama_core);
         b.installArtifact(lfg_vision);
@@ -673,9 +678,11 @@ fn addExecutables(
     lfg_core: *std.Build.Step.Compile,
     spdlog_include: std.Build.LazyPath,
     cxx_flags: []const []const u8,
+    c_flags: []const []const u8,
     framework_path: ?[]const u8,
     private_framework_path: ?[]const u8,
     sysroot: ?[]const u8,
+    build_demo: bool,
 ) void {
     _ = vision;
 
@@ -766,8 +773,168 @@ fn addExecutables(
     addCommonExeLinks(llama_struct, target, framework_path, private_framework_path, sysroot);
     b.installArtifact(llama_struct);
 
+    if (build_demo and target.result.os.tag == .macos) {
+        const glfw_lib = addGlfwLibrary(b, target, optimize, c_flags, framework_path, private_framework_path, sysroot);
+        const imgui_lib = addImguiLibrary(b, target, optimize, glfw_lib, cxx_flags, framework_path, private_framework_path);
+        const demo = addExe(b, target, optimize, "lfg-demo", &[_][]const u8{"tools/demo/main.cpp"}, spdlog_include, cxx_flags, framework_path, private_framework_path);
+        demo.linkLibrary(lfg_core);
+        demo.linkLibrary(imgui_lib);
+        demo.linkLibrary(glfw_lib);
+        demo.linkLibrary(ggml);
+        demo.addIncludePath(b.path("third_party/imgui"));
+        demo.addIncludePath(b.path("third_party/imgui/backends"));
+        const glfw_dep = b.dependency("glfw", .{});
+        demo.addIncludePath(glfw_dep.path("include"));
+        // ObjC file dialog source
+        var objc_flags = std.ArrayList([]const u8).empty;
+        objc_flags.append(b.allocator, "-fno-objc-arc") catch @panic("oom");
+        objc_flags.append(b.allocator, "-Wno-deprecated-declarations") catch @panic("oom");
+        objc_flags.appendSlice(b.allocator, c_flags) catch @panic("oom");
+        const objc_flags_slice = objc_flags.toOwnedSlice(b.allocator) catch @panic("oom");
+        demo.addCSourceFiles(.{ .files = &[_][]const u8{"tools/demo/file_dialog.m"}, .flags = objc_flags_slice });
+        demo.addIncludePath(b.path("tools/demo"));
+        demo.linkFramework("AppKit");
+        demo.linkFramework("UniformTypeIdentifiers");
+        demo.linkFramework("OpenGL");
+        demo.linkFramework("Cocoa");
+        demo.linkFramework("IOKit");
+        demo.linkFramework("CoreFoundation");
+        demo.linkFramework("CoreVideo");
+        addCommonExeLinks(demo, target, framework_path, private_framework_path, sysroot);
+        b.installArtifact(demo);
+    }
+
     addBenchmarks(b, target, optimize, ggml, llama_core, lfg_core, spdlog_include, cxx_flags, framework_path, private_framework_path, sysroot);
     addTests(b, target, optimize, ggml, lfg_core, spdlog_include, cxx_flags, framework_path, private_framework_path, sysroot);
+}
+
+fn addGlfwLibrary(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    c_flags: []const []const u8,
+    framework_path: ?[]const u8,
+    private_framework_path: ?[]const u8,
+    sysroot: ?[]const u8,
+) *std.Build.Step.Compile {
+    const glfw_dep = b.dependency("glfw", .{});
+    const glfw_mod = createModule(b, target, optimize, true, optimize == .ReleaseFast, framework_path, private_framework_path);
+    const glfw = b.addLibrary(.{
+        .name = "glfw",
+        .root_module = glfw_mod,
+        .linkage = .static,
+    });
+
+    glfw.addIncludePath(glfw_dep.path("include"));
+    glfw.addIncludePath(glfw_dep.path("src"));
+
+    // Common C sources
+    const common_c = &[_][]const u8{
+        "src/context.c",
+        "src/init.c",
+        "src/input.c",
+        "src/monitor.c",
+        "src/platform.c",
+        "src/vulkan.c",
+        "src/window.c",
+        "src/egl_context.c",
+        "src/osmesa_context.c",
+        "src/null_init.c",
+        "src/null_joystick.c",
+        "src/null_monitor.c",
+        "src/null_window.c",
+    };
+
+    // macOS C sources
+    const macos_c = &[_][]const u8{
+        "src/cocoa_time.c",
+        "src/posix_module.c",
+        "src/posix_thread.c",
+        "src/posix_poll.c",
+    };
+
+    // macOS ObjC sources
+    const macos_m = &[_][]const u8{
+        "src/cocoa_init.m",
+        "src/cocoa_joystick.m",
+        "src/cocoa_monitor.m",
+        "src/cocoa_window.m",
+        "src/nsgl_context.m",
+    };
+
+    // Build C flags with _GLFW_COCOA define
+    var glfw_c_flags = std.ArrayList([]const u8).empty;
+    glfw_c_flags.append(b.allocator, "-D_GLFW_COCOA") catch @panic("oom");
+    glfw_c_flags.append(b.allocator, "-Wno-deprecated-declarations") catch @panic("oom");
+    glfw_c_flags.appendSlice(b.allocator, c_flags) catch @panic("oom");
+    const glfw_c_flags_slice = glfw_c_flags.toOwnedSlice(b.allocator) catch @panic("oom");
+
+    // Build ObjC flags (no ARC — GLFW uses manual retain/release)
+    var glfw_m_flags = std.ArrayList([]const u8).empty;
+    glfw_m_flags.append(b.allocator, "-D_GLFW_COCOA") catch @panic("oom");
+    glfw_m_flags.append(b.allocator, "-fno-objc-arc") catch @panic("oom");
+    glfw_m_flags.append(b.allocator, "-Wno-deprecated-declarations") catch @panic("oom");
+    glfw_m_flags.append(b.allocator, "-Wno-nullability-completeness") catch @panic("oom");
+    glfw_m_flags.appendSlice(b.allocator, c_flags) catch @panic("oom");
+    const glfw_m_flags_slice = glfw_m_flags.toOwnedSlice(b.allocator) catch @panic("oom");
+
+    glfw.addCSourceFiles(.{ .root = glfw_dep.path("."), .files = common_c, .flags = glfw_c_flags_slice });
+    glfw.addCSourceFiles(.{ .root = glfw_dep.path("."), .files = macos_c, .flags = glfw_c_flags_slice });
+    glfw.addCSourceFiles(.{ .root = glfw_dep.path("."), .files = macos_m, .flags = glfw_m_flags_slice });
+
+    glfw.linkFramework("Cocoa");
+    glfw.linkFramework("IOKit");
+    glfw.linkFramework("CoreFoundation");
+    glfw.linkFramework("CoreVideo");
+    glfw.linkFramework("OpenGL");
+
+    if (sysroot) |path| {
+        const fw_path = b.fmt("{s}/System/Library/Frameworks", .{path});
+        glfw.root_module.addFrameworkPath(.{ .cwd_relative = fw_path });
+        const usr_lib = b.fmt("{s}/usr/lib", .{path});
+        glfw.addLibraryPath(.{ .cwd_relative = usr_lib });
+        // Add system include path for cups/ppd.h and other SDK headers
+        const usr_include = b.fmt("{s}/usr/include", .{path});
+        glfw.addSystemIncludePath(.{ .cwd_relative = usr_include });
+    }
+
+    return glfw;
+}
+
+fn addImguiLibrary(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    glfw_lib: *std.Build.Step.Compile,
+    cxx_flags: []const []const u8,
+    framework_path: ?[]const u8,
+    private_framework_path: ?[]const u8,
+) *std.Build.Step.Compile {
+    const glfw_dep = b.dependency("glfw", .{});
+    const imgui_mod = createModule(b, target, optimize, true, optimize == .ReleaseFast, framework_path, private_framework_path);
+    const imgui = b.addLibrary(.{
+        .name = "imgui",
+        .root_module = imgui_mod,
+        .linkage = .static,
+    });
+
+    imgui.addIncludePath(b.path("third_party/imgui"));
+    imgui.addIncludePath(glfw_dep.path("include"));
+
+    const imgui_sources = &[_][]const u8{
+        "third_party/imgui/imgui.cpp",
+        "third_party/imgui/imgui_demo.cpp",
+        "third_party/imgui/imgui_draw.cpp",
+        "third_party/imgui/imgui_tables.cpp",
+        "third_party/imgui/imgui_widgets.cpp",
+        "third_party/imgui/backends/imgui_impl_glfw.cpp",
+        "third_party/imgui/backends/imgui_impl_opengl3.cpp",
+    };
+
+    imgui.addCSourceFiles(.{ .files = imgui_sources, .flags = cxx_flags });
+    imgui.linkLibrary(glfw_lib);
+
+    return imgui;
 }
 
 fn addBenchmarks(
@@ -867,6 +1034,7 @@ fn addTests(
         "test_chat_integration",
         "test_tool_injection",
         "test_tool_chat_integration",
+        "test_chat_first_message",
     };
 
     const test_files = [_][]const u8{
@@ -906,6 +1074,7 @@ fn addTests(
         "src/tests/test_chat_integration.cpp",
         "src/tests/test_tool_injection.cpp",
         "src/tests/test_tool_chat_integration.cpp",
+        "src/tests/test_chat_first_message.cpp",
     };
 
     var test_step = b.step("test", "Build and run tests");

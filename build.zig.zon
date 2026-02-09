@@ -8,6 +8,10 @@
             .url = "https://github.com/gabime/spdlog/archive/refs/tags/v1.12.0.tar.gz",
             .hash = "N-V-__8AAG3QEAByVfqHowtggiV2ew50WieLRYslNPG00-un",
         },
+        .glfw = .{
+            .url = "https://github.com/glfw/glfw/releases/download/3.4/glfw-3.4.zip",
+            .hash = "N-V-__8AAGILeQBiX6fOeXM8aImETLAuofbkuBtGo_q6zsGB",
+        },
     },
     .paths = .{
         "build.zig",

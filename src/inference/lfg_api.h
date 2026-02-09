@@ -285,6 +285,11 @@ typedef const char * (*lfg_generate_entropy_cb)(
 typedef struct lfg_generate_config {
     int32_t  max_tokens;          // Hard token limit. 0 = use session config.
 
+    // Chat history options (only used by lfg_session_chat_generate)
+    bool     include_history_reasoning;  // false (default) = strip <think>...</think>
+                                         // from assistant messages in history.
+                                         // Saves context for multi-turn chat.
+
     // Callbacks (nullable — NULL means no callback)
     lfg_generate_token_cb      token_cb;
     void                     * token_cb_data;

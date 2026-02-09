@@ -2449,6 +2449,7 @@ LFG_API int32_t lfg_session_embed(lfg_session * session,
 LFG_API lfg_generate_config lfg_generate_default_config(void) {
     lfg_generate_config cfg{};
     cfg.max_tokens = 0;
+    cfg.include_history_reasoning = false;
     cfg.token_cb = nullptr;
     cfg.token_cb_data = nullptr;
     cfg.entropy_cb = nullptr;
@@ -2541,6 +2542,30 @@ LFG_API lfg_generate_result lfg_session_generate(
             if (stop_buf_count > 0) {
                 int32_t discard = (session->last_stop_len > 1)
                     ? (session->last_stop_len - 1) : 0;
+
+                // Text-level: suppress trailing tokens whose text forms a
+                // prefix of any stop string (e.g. "<|" before EOS when the
+                // stop string is "<|im_end|>").
+                if (session->stop_text_count > 0 && discard == 0) {
+                    // Build suffix text from buffer tail inward
+                    char tail_buf[1024];
+                    int32_t tail_len = 0;
+                    for (int32_t j = 0; j < stop_buf_count && tail_len < (int32_t)sizeof(tail_buf) - 256; j++) {
+                        std::memcpy(tail_buf + tail_len, stop_buf[j].piece, stop_buf[j].piece_len);
+                        tail_len += stop_buf[j].piece_len;
+                    }
+                    tail_buf[tail_len] = '\0';
+
+                    // Check if any stop string starts with the buffered text
+                    for (int32_t s = 0; s < session->stop_text_count; s++) {
+                        if (tail_len > 0 && tail_len <= session->stop_text_lens[s] &&
+                            std::strncmp(tail_buf, session->stop_texts[s], tail_len) == 0) {
+                            discard = stop_buf_count;
+                            break;
+                        }
+                    }
+                }
+
                 int32_t flush_n = stop_buf_count - discard;
                 if (flush_n < 0) flush_n = 0;
                 for (int32_t j = 0; j < flush_n; j++) {
@@ -2933,6 +2958,70 @@ LFG_API lfg_generate_result lfg_session_chat_generate(
         }
     }
 
+    // 2b. Strip <think>...</think> from assistant messages in history.
+    //     Saves context for multi-turn chat — reasoning is internal to the model
+    //     and doesn't need to be replayed.  Caller can set
+    //     config.include_history_reasoning=true to keep it.
+    char **stripped_bufs = nullptr;
+    int    stripped_count = 0;
+
+    if (!config.include_history_reasoning) {
+        // Count assistant messages that contain <think>
+        int n_strip = 0;
+        for (size_t i = 0; i < tmpl_n; ++i) {
+            if (tmpl_msgs[i].role && std::strcmp(tmpl_msgs[i].role, "assistant") == 0 &&
+                tmpl_msgs[i].content && std::strstr(tmpl_msgs[i].content, "<think>")) {
+                n_strip++;
+            }
+        }
+
+        if (n_strip > 0) {
+            // Ensure we have a mutable message array
+            if (!mod_msgs) {
+                mod_msgs = (lfg_chat_message *)malloc(tmpl_n * sizeof(lfg_chat_message));
+                std::memcpy(mod_msgs, tmpl_msgs, tmpl_n * sizeof(lfg_chat_message));
+                tmpl_msgs = mod_msgs;
+            }
+
+            stripped_bufs = (char **)calloc(n_strip, sizeof(char *));
+
+            for (size_t i = 0; i < tmpl_n; ++i) {
+                if (mod_msgs[i].role && std::strcmp(mod_msgs[i].role, "assistant") == 0 &&
+                    mod_msgs[i].content) {
+                    const char *think_open = std::strstr(mod_msgs[i].content, "<think>");
+                    if (!think_open) continue;
+
+                    const char *think_close = std::strstr(think_open, "</think>");
+                    if (think_close) {
+                        // Strip <think>...</think> block, keep text before and after
+                        const char *after = think_close + 8;  // len("</think>")
+                        // Skip leading whitespace after </think>
+                        while (*after == ' ' || *after == '\t' || *after == '\n' || *after == '\r') after++;
+
+                        size_t before_len = (size_t)(think_open - mod_msgs[i].content);
+                        size_t after_len = std::strlen(after);
+                        char *buf = (char *)malloc(before_len + after_len + 1);
+                        if (before_len > 0) std::memcpy(buf, mod_msgs[i].content, before_len);
+                        std::memcpy(buf + before_len, after, after_len);
+                        buf[before_len + after_len] = '\0';
+
+                        stripped_bufs[stripped_count++] = buf;
+                        mod_msgs[i].content = buf;
+                    } else {
+                        // Unclosed <think> (truncated) — strip from <think> onward
+                        size_t before_len = (size_t)(think_open - mod_msgs[i].content);
+                        char *buf = (char *)malloc(before_len + 1);
+                        if (before_len > 0) std::memcpy(buf, mod_msgs[i].content, before_len);
+                        buf[before_len] = '\0';
+
+                        stripped_bufs[stripped_count++] = buf;
+                        mod_msgs[i].content = buf;
+                    }
+                }
+            }
+        }
+    }
+
     // 3. Detect chat template from model metadata
     const char *tmpl_str = lfg_model_chat_template(session->model, nullptr);
 
@@ -2952,12 +3041,12 @@ LFG_API lfg_generate_result lfg_session_chat_generate(
             int32_t prefix_tok_cap = prefix_needed + 16;
             lfg_token *prefix_toks = (lfg_token *)malloc(prefix_tok_cap * sizeof(lfg_token));
             int32_t pn = lfg_tokenize(vocab, prefix_buf, prefix_needed,
-                                       prefix_toks, prefix_tok_cap, true, false);
+                                       prefix_toks, prefix_tok_cap, true, true);
             if (pn < 0) {
                 prefix_tok_cap = -pn;
                 prefix_toks = (lfg_token *)realloc(prefix_toks, prefix_tok_cap * sizeof(lfg_token));
                 pn = lfg_tokenize(vocab, prefix_buf, prefix_needed,
-                                   prefix_toks, prefix_tok_cap, true, false);
+                                   prefix_toks, prefix_tok_cap, true, true);
             }
             session->surprise_skip_tokens = pn > 0 ? pn : 0;
             free(prefix_toks);
@@ -2968,6 +3057,8 @@ LFG_API lfg_generate_result lfg_session_chat_generate(
     // 4. Apply template: first call with NULL buf to get required size
     int32_t needed = lfg_chat_apply_template(tmpl_str, tmpl_msgs, tmpl_n, true, nullptr, 0);
     if (needed <= 0) {
+        for (int i = 0; i < stripped_count; ++i) free(stripped_bufs[i]);
+        free(stripped_bufs);
         free(mod_msgs);
         free(sys_content_buf);
         lfg_set_last_error(LFG_ERROR_INVALID_ARGUMENT,
@@ -2980,6 +3071,8 @@ LFG_API lfg_generate_result lfg_session_chat_generate(
     lfg_chat_apply_template(tmpl_str, tmpl_msgs, tmpl_n, true, formatted, needed + 1);
     formatted[needed] = '\0';
 
+    for (int i = 0; i < stripped_count; ++i) free(stripped_bufs[i]);
+    free(stripped_bufs);
     free(mod_msgs);
     free(sys_content_buf);
 
@@ -2987,11 +3080,11 @@ LFG_API lfg_generate_result lfg_session_chat_generate(
     const lfg_vocab *vocab = lfg_model_get_vocab(session->model);
     int32_t tok_cap = needed + 16;
     lfg_token *tokens = (lfg_token *)malloc(tok_cap * sizeof(lfg_token));
-    int32_t n = lfg_tokenize(vocab, formatted, needed, tokens, tok_cap, true, false);
+    int32_t n = lfg_tokenize(vocab, formatted, needed, tokens, tok_cap, true, true);
     if (n < 0) {
         tok_cap = -n;
         tokens = (lfg_token *)realloc(tokens, tok_cap * sizeof(lfg_token));
-        n = lfg_tokenize(vocab, formatted, needed, tokens, tok_cap, true, false);
+        n = lfg_tokenize(vocab, formatted, needed, tokens, tok_cap, true, true);
     }
     free(formatted);
 
@@ -3003,9 +3096,16 @@ LFG_API lfg_generate_result lfg_session_chat_generate(
     }
 
     // 6. Ingest prompt — update_sampler=false so grammar isn't fed prompt tokens
-    lfg_session_ingest_tokens(session, tokens, n, false);
+    bool ok = lfg_session_ingest_tokens(session, tokens, n, false);
     session->surprise_skip_tokens = 0;  // consumed
     free(tokens);
+
+    if (!ok) {
+        lfg_set_last_error(LFG_ERROR_INTERNAL,
+            "%s: prompt ingestion failed (prompt %d tokens may exceed n_ctx %d)",
+            __func__, n, session->config.n_ctx);
+        return result;
+    }
 
     // 7. Auto-configure text stop string for the EOS token's text representation.
     //    The generate loop already stops on the special EOS token, but small
