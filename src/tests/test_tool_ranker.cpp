@@ -27,18 +27,6 @@ static std::vector<lfg_token> tokenize(const lfg_vocab *vocab, const std::string
     return tokens;
 }
 
-static std::string generate(lfg_session *session, const lfg_vocab *vocab, int max_tokens) {
-    std::string output;
-    for (int i = 0; i < max_tokens; ++i) {
-        lfg_session_decode(session);
-        lfg_token tok = lfg_session_sample(session);
-        if (lfg_vocab_is_eog(vocab, tok)) break;
-        output += token_to_string(vocab, tok);
-        lfg_session_ingest_tokens(session, &tok, 1, false);
-    }
-    return output;
-}
-
 // ---------------------------------------------------------------------------
 // 350M model — unit / mechanical tests (fast, always available)
 // ---------------------------------------------------------------------------
@@ -119,12 +107,13 @@ TEST_CASE("Top-k constraint") {
         {"a", "A tool with a long description that takes many tokens", nullptr},
         {"b", "Another tool with a long description to exceed budget", nullptr},
     };
-    // top_k=1: only the highest-ranked tool is injected
+    // top_k=1: only the highest-ranked tool appears in output
     REQUIRE(lfg_session_register_tools(session, tools, 2, 1) == 2);
 
-    auto tokens = tokenize(lfg_model_get_vocab(model), "Hello", true);
-    REQUIRE(lfg_session_ingest_tokens(session, tokens.data(), tokens.size(), true));
-    CHECK(lfg_session_decode(session)); // must not crash
+    // rank_tools should work without crashing
+    const char *query = "Hello";
+    int32_t needed = lfg_session_rank_tools(session, query, 5, nullptr, 0);
+    CHECK(needed > 0);
 
     lfg_session_free(session);
 }
@@ -174,8 +163,6 @@ TEST_CASE("Integration: Weather query ranks weather tool highest") {
     lfg_model *model = get_1_2b();
     if (!model) { MESSAGE("Skipping: 1.2B model not found"); return; }
 
-    const lfg_vocab *vocab = lfg_model_get_vocab(model);
-
     lfg_session_config config = lfg_session_default_config();
     config.n_ctx = 2048;
     config.sampling.temp = 0.0f;
@@ -184,21 +171,29 @@ TEST_CASE("Integration: Weather query ranks weather tool highest") {
 
     REQUIRE(lfg_session_register_tools(session, TOOLS, N_TOOLS, 5) == N_TOOLS);
 
-    std::string prompt = "What is the weather like in San Francisco today?\n";
-    auto tokens = tokenize(vocab, prompt, true);
-    REQUIRE(lfg_session_ingest_tokens(session, tokens.data(), tokens.size(), true));
+    // Rank tools directly
+    const char *query = "What is the weather like in San Francisco today?";
+    int32_t needed = lfg_session_rank_tools(session, query, (int32_t)strlen(query), nullptr, 0);
+    REQUIRE(needed > 0);
 
-    lfg_session_decode(session);
-    std::string output = generate(session, vocab, 100);
-    MESSAGE("Weather query output: " << output);
+    std::vector<char> buf(needed + 1);
+    int32_t written = lfg_session_rank_tools(session, query, (int32_t)strlen(query), buf.data(), (int32_t)buf.size());
+    REQUIRE(written > 0);
 
-    // The model saw the injected tool descriptions. Generation should reference weather.
-    bool mentions_weather = output.find("weather") != std::string::npos ||
-                            output.find("Weather") != std::string::npos ||
-                            output.find("temperature") != std::string::npos ||
-                            output.find("forecast") != std::string::npos ||
-                            output.find("San Francisco") != std::string::npos;
-    CHECK_MESSAGE(mentions_weather, "Expected weather-related output, got: " << output);
+    std::string result(buf.data(), written);
+    MESSAGE("Weather ranking output: " << result);
+
+    // get_weather should appear first in the formatted tool list
+    auto weather_pos = result.find("get_weather");
+    auto calc_pos = result.find("calculator");
+    auto search_pos = result.find("search_web");
+    CHECK_MESSAGE(weather_pos != std::string::npos, "Expected get_weather in output");
+    if (weather_pos != std::string::npos && calc_pos != std::string::npos) {
+        CHECK_MESSAGE(weather_pos < calc_pos, "get_weather should rank before calculator");
+    }
+    if (weather_pos != std::string::npos && search_pos != std::string::npos) {
+        CHECK_MESSAGE(weather_pos < search_pos, "get_weather should rank before search_web");
+    }
 
     lfg_session_free(session);
 }
@@ -207,8 +202,6 @@ TEST_CASE("Integration: Math query ranks calculator tool highest") {
     lfg_model *model = get_1_2b();
     if (!model) { MESSAGE("Skipping: 1.2B model not found"); return; }
 
-    const lfg_vocab *vocab = lfg_model_get_vocab(model);
-
     lfg_session_config config = lfg_session_default_config();
     config.n_ctx = 2048;
     config.sampling.temp = 0.0f;
@@ -217,21 +210,24 @@ TEST_CASE("Integration: Math query ranks calculator tool highest") {
 
     REQUIRE(lfg_session_register_tools(session, TOOLS, N_TOOLS, 5) == N_TOOLS);
 
-    std::string prompt = "What is 1234 multiplied by 5678?\n";
-    auto tokens = tokenize(vocab, prompt, true);
-    REQUIRE(lfg_session_ingest_tokens(session, tokens.data(), tokens.size(), true));
+    const char *query = "What is 1234 multiplied by 5678?";
+    int32_t needed = lfg_session_rank_tools(session, query, (int32_t)strlen(query), nullptr, 0);
+    REQUIRE(needed > 0);
 
-    lfg_session_decode(session);
-    std::string output = generate(session, vocab, 100);
-    MESSAGE("Math query output: " << output);
+    std::vector<char> buf(needed + 1);
+    int32_t written = lfg_session_rank_tools(session, query, (int32_t)strlen(query), buf.data(), (int32_t)buf.size());
+    REQUIRE(written > 0);
 
-    bool mentions_math = output.find("calculator") != std::string::npos ||
-                         output.find("Calculator") != std::string::npos ||
-                         output.find("multiply") != std::string::npos ||
-                         output.find("1234") != std::string::npos ||
-                         output.find("5678") != std::string::npos ||
-                         output.find("result") != std::string::npos;
-    CHECK_MESSAGE(mentions_math, "Expected math-related output, got: " << output);
+    std::string result(buf.data(), written);
+    MESSAGE("Math ranking output: " << result);
+
+    // calculator should appear first
+    auto calc_pos = result.find("calculator");
+    auto weather_pos = result.find("get_weather");
+    CHECK_MESSAGE(calc_pos != std::string::npos, "Expected calculator in output");
+    if (calc_pos != std::string::npos && weather_pos != std::string::npos) {
+        CHECK_MESSAGE(calc_pos < weather_pos, "calculator should rank before get_weather");
+    }
 
     lfg_session_free(session);
 }
@@ -239,8 +235,6 @@ TEST_CASE("Integration: Math query ranks calculator tool highest") {
 TEST_CASE("Integration: Session reset allows re-ranking with different query") {
     lfg_model *model = get_1_2b();
     if (!model) { MESSAGE("Skipping: 1.2B model not found"); return; }
-
-    const lfg_vocab *vocab = lfg_model_get_vocab(model);
 
     lfg_session_config config = lfg_session_default_config();
     config.n_ctx = 2048;
@@ -250,75 +244,100 @@ TEST_CASE("Integration: Session reset allows re-ranking with different query") {
 
     REQUIRE(lfg_session_register_tools(session, TOOLS, N_TOOLS, 3) == N_TOOLS);
 
-    // First cycle: weather query
+    // First ranking: weather query
+    std::string result1;
     {
-        std::string prompt = "What is the weather in Tokyo?\n";
-        auto tokens = tokenize(vocab, prompt, true);
-        lfg_session_ingest_tokens(session, tokens.data(), tokens.size(), true);
-        lfg_session_decode(session);
-        std::string out1 = generate(session, vocab, 60);
-        MESSAGE("Cycle 1 (weather): " << out1);
+        const char *query = "What is the weather in Tokyo?";
+        int32_t needed = lfg_session_rank_tools(session, query, (int32_t)strlen(query), nullptr, 0);
+        REQUIRE(needed > 0);
+        std::vector<char> buf(needed + 1);
+        lfg_session_rank_tools(session, query, (int32_t)strlen(query), buf.data(), (int32_t)buf.size());
+        result1 = std::string(buf.data());
+        MESSAGE("Cycle 1 (weather): " << result1);
     }
 
     // Reset and re-query with email topic
     lfg_session_reset(session);
+    std::string result2;
     {
-        std::string prompt = "Send an email to alice@example.com about the meeting tomorrow.\n";
-        auto tokens = tokenize(vocab, prompt, true);
-        lfg_session_ingest_tokens(session, tokens.data(), tokens.size(), true);
-        lfg_session_decode(session);
-        std::string out2 = generate(session, vocab, 60);
-        MESSAGE("Cycle 2 (email): " << out2);
+        const char *query = "Send an email to alice@example.com about the meeting tomorrow.";
+        int32_t needed = lfg_session_rank_tools(session, query, (int32_t)strlen(query), nullptr, 0);
+        REQUIRE(needed > 0);
+        std::vector<char> buf(needed + 1);
+        lfg_session_rank_tools(session, query, (int32_t)strlen(query), buf.data(), (int32_t)buf.size());
+        result2 = std::string(buf.data());
+        MESSAGE("Cycle 2 (email): " << result2);
+    }
 
-        // After reset, the model should produce output influenced by the re-injected tools.
-        // It may reference email keywords or produce tool-related XML output.
-        bool mentions_email = out2.find("email") != std::string::npos ||
-                              out2.find("Email") != std::string::npos ||
-                              out2.find("send") != std::string::npos ||
-                              out2.find("alice") != std::string::npos ||
-                              out2.find("meeting") != std::string::npos ||
-                              out2.find("tool") != std::string::npos;
-        CHECK_MESSAGE(mentions_email, "Expected email/tool-related output after reset, got: " << out2);
+    // After reset, different queries should produce different tool orderings
+    // Weather query should have get_weather first, email query should have send_email first
+    auto w1_pos = result1.find("get_weather");
+    auto e1_pos = result1.find("send_email");
+    auto w2_pos = result2.find("get_weather");
+    auto e2_pos = result2.find("send_email");
+
+    if (w1_pos != std::string::npos && e1_pos != std::string::npos) {
+        CHECK_MESSAGE(w1_pos < e1_pos, "Weather query should rank get_weather before send_email");
+    }
+    if (e2_pos != std::string::npos && w2_pos != std::string::npos) {
+        CHECK_MESSAGE(e2_pos < w2_pos, "Email query should rank send_email before get_weather");
     }
 
     lfg_session_free(session);
 }
 
-TEST_CASE("Integration: Different top_k values produce different output") {
+TEST_CASE("Integration: Different top_k values produce different output lengths") {
     lfg_model *model = get_1_2b();
     if (!model) { MESSAGE("Skipping: 1.2B model not found"); return; }
 
-    const lfg_vocab *vocab = lfg_model_get_vocab(model);
+    // top_k=1 vs top_k=5: fewer tools means shorter formatted output
+    lfg_session_config config = lfg_session_default_config();
+    config.n_ctx = 2048;
+    config.sampling.temp = 0.0f;
 
-    // top_k=1 vs top_k=5: fewer tools injected means different context.
-    for (int32_t k : {1, 5}) {
-        lfg_session_config config = lfg_session_default_config();
-        config.n_ctx = 2048;
-        config.sampling.temp = 0.0f;
+    const char *query = "Search the web for recent news about AI.";
+    int32_t query_len = (int32_t)strlen(query);
+
+    int32_t len_k1 = 0;
+    {
         lfg_session *session = lfg_session_create(model, &config);
         REQUIRE(session != nullptr);
-
-        REQUIRE(lfg_session_register_tools(session, TOOLS, N_TOOLS, k) == N_TOOLS);
-
-        std::string prompt = "Search the web for recent news about AI.\n";
-        auto tokens = tokenize(vocab, prompt, true);
-        lfg_session_ingest_tokens(session, tokens.data(), tokens.size(), true);
-        lfg_session_decode(session);
-        std::string output = generate(session, vocab, 60);
-        MESSAGE("top_k=" << k << " output: " << output);
-
-        CHECK(!output.empty());
-
+        REQUIRE(lfg_session_register_tools(session, TOOLS, N_TOOLS, 1) == N_TOOLS);
+        len_k1 = lfg_session_rank_tools(session, query, query_len, nullptr, 0);
+        MESSAGE("top_k=1 length: " << len_k1);
+        CHECK(len_k1 > 0);
         lfg_session_free(session);
     }
+
+    int32_t len_k5 = 0;
+    {
+        lfg_session *session = lfg_session_create(model, &config);
+        REQUIRE(session != nullptr);
+        REQUIRE(lfg_session_register_tools(session, TOOLS, N_TOOLS, 5) == N_TOOLS);
+        len_k5 = lfg_session_rank_tools(session, query, query_len, nullptr, 0);
+        MESSAGE("top_k=5 length: " << len_k5);
+        CHECK(len_k5 > 0);
+        lfg_session_free(session);
+    }
+
+    CHECK_MESSAGE(len_k1 < len_k5, "top_k=1 should produce shorter output than top_k=5");
 }
 
-TEST_CASE("Integration: No tools vs with tools produces different output") {
+TEST_CASE("Integration: No tools vs with tools via prompt_generate") {
     lfg_model *model = get_1_2b();
     if (!model) { MESSAGE("Skipping: 1.2B model not found"); return; }
 
-    const lfg_vocab *vocab = lfg_model_get_vocab(model);
-    std::string prompt = "I need to check the weather in Paris and then send an email about it.\n";
+    const char *prompt = "I need to check the weather in Paris and then send an email about it.";
+    int32_t prompt_len = (int32_t)strlen(prompt);
+
+    // Collect output via token callback
+    struct cb_data { std::string output; };
+
+    auto token_cb = [](lfg_token, const char *piece, int32_t piece_len, void *ud) -> lfg_generate_action {
+        auto *d = (cb_data *)ud;
+        d->output.append(piece, piece_len);
+        return LFG_GENERATE_CONTINUE;
+    };
 
     // Run without tools
     std::string output_no_tools;
@@ -328,10 +347,14 @@ TEST_CASE("Integration: No tools vs with tools produces different output") {
         config.sampling.temp = 0.0f;
         lfg_session *session = lfg_session_create(model, &config);
 
-        auto tokens = tokenize(vocab, prompt, true);
-        lfg_session_ingest_tokens(session, tokens.data(), tokens.size(), true);
-        lfg_session_decode(session);
-        output_no_tools = generate(session, vocab, 80);
+        cb_data data;
+        lfg_generate_config gcfg = lfg_generate_default_config();
+        gcfg.max_tokens = 80;
+        gcfg.token_cb = token_cb;
+        gcfg.token_cb_data = &data;
+
+        lfg_session_prompt_generate(session, prompt, prompt_len, true, gcfg);
+        output_no_tools = data.output;
         MESSAGE("Without tools: " << output_no_tools);
 
         lfg_session_free(session);
@@ -347,26 +370,38 @@ TEST_CASE("Integration: No tools vs with tools produces different output") {
 
         lfg_session_register_tools(session, TOOLS, N_TOOLS, 3);
 
-        auto tokens = tokenize(vocab, prompt, true);
-        lfg_session_ingest_tokens(session, tokens.data(), tokens.size(), true);
-        lfg_session_decode(session);
-        output_with_tools = generate(session, vocab, 80);
+        cb_data data;
+        lfg_generate_config gcfg = lfg_generate_default_config();
+        gcfg.max_tokens = 80;
+        gcfg.token_cb = token_cb;
+        gcfg.token_cb_data = &data;
+
+        lfg_session_prompt_generate(session, prompt, prompt_len, true, gcfg);
+        output_with_tools = data.output;
         MESSAGE("With tools: " << output_with_tools);
 
         lfg_session_free(session);
     }
 
-    // Tool injection changes the KV cache, so outputs should differ
+    // Tool injection changes the context, so outputs should differ
     CHECK_MESSAGE(output_no_tools != output_with_tools,
                   "Expected different outputs with/without tools");
 }
 
-TEST_CASE("Integration: top_k=2 vs top_k=5 produces different output") {
+TEST_CASE("Integration: top_k=2 vs top_k=5 via prompt_generate") {
     lfg_model *model = get_1_2b();
     if (!model) { MESSAGE("Skipping: 1.2B model not found"); return; }
 
-    const lfg_vocab *vocab = lfg_model_get_vocab(model);
-    std::string prompt = "What is the weather like in San Francisco today?\n";
+    const char *prompt = "What is the weather like in San Francisco today?";
+    int32_t prompt_len = (int32_t)strlen(prompt);
+
+    struct cb_data { std::string output; };
+
+    auto token_cb = [](lfg_token, const char *piece, int32_t piece_len, void *ud) -> lfg_generate_action {
+        auto *d = (cb_data *)ud;
+        d->output.append(piece, piece_len);
+        return LFG_GENERATE_CONTINUE;
+    };
 
     std::string output_top2;
     {
@@ -378,10 +413,14 @@ TEST_CASE("Integration: top_k=2 vs top_k=5 produces different output") {
 
         REQUIRE(lfg_session_register_tools(session, TOOLS, N_TOOLS, 2) == N_TOOLS);
 
-        auto tokens = tokenize(vocab, prompt, true);
-        lfg_session_ingest_tokens(session, tokens.data(), tokens.size(), true);
-        lfg_session_decode(session);
-        output_top2 = generate(session, vocab, 60);
+        cb_data data;
+        lfg_generate_config gcfg = lfg_generate_default_config();
+        gcfg.max_tokens = 60;
+        gcfg.token_cb = token_cb;
+        gcfg.token_cb_data = &data;
+
+        lfg_session_prompt_generate(session, prompt, prompt_len, true, gcfg);
+        output_top2 = data.output;
         MESSAGE("top_k=2 output: " << output_top2);
 
         CHECK(!output_top2.empty());
@@ -398,10 +437,14 @@ TEST_CASE("Integration: top_k=2 vs top_k=5 produces different output") {
 
         REQUIRE(lfg_session_register_tools(session, TOOLS, N_TOOLS, 5) == N_TOOLS);
 
-        auto tokens = tokenize(vocab, prompt, true);
-        lfg_session_ingest_tokens(session, tokens.data(), tokens.size(), true);
-        lfg_session_decode(session);
-        output_all = generate(session, vocab, 60);
+        cb_data data;
+        lfg_generate_config gcfg = lfg_generate_default_config();
+        gcfg.max_tokens = 60;
+        gcfg.token_cb = token_cb;
+        gcfg.token_cb_data = &data;
+
+        lfg_session_prompt_generate(session, prompt, prompt_len, true, gcfg);
+        output_all = data.output;
         MESSAGE("top_k=5 output: " << output_all);
 
         lfg_session_free(session);

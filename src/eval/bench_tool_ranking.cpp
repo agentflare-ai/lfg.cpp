@@ -45,15 +45,15 @@ static const lfg_tool_desc TOOLS[] = {
 };
 static const int32_t N_TOOLS = 5;
 
-// Pre-formatted XML block with all 5 tools (what you'd inject without ranking).
-static const char ALL_TOOLS_XML[] =
-    "<tools>\n"
-    "<tool name=\"get_weather\" description=\"Get current weather forecast for a city or location. Returns temperature, conditions, and humidity.\" schema='{\"type\":\"object\",\"properties\":{\"location\":{\"type\":\"string\",\"description\":\"City name, e.g. San Francisco\"},\"unit\":{\"type\":\"string\",\"enum\":[\"celsius\",\"fahrenheit\"]}},\"required\":[\"location\"]}'/>\n"
-    "<tool name=\"calculator\" description=\"Perform arithmetic calculations. Supports add, subtract, multiply, divide.\" schema='{\"type\":\"object\",\"properties\":{\"operation\":{\"type\":\"string\",\"enum\":[\"add\",\"subtract\",\"multiply\",\"divide\"]},\"x\":{\"type\":\"number\"},\"y\":{\"type\":\"number\"}},\"required\":[\"operation\",\"x\",\"y\"]}'/>\n"
-    "<tool name=\"search_web\" description=\"Search the internet for information, articles, and current events.\" schema='{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"}},\"required\":[\"query\"]}'/>\n"
-    "<tool name=\"send_email\" description=\"Send an email message to a recipient with subject and body.\" schema='{\"type\":\"object\",\"properties\":{\"to\":{\"type\":\"string\"},\"subject\":{\"type\":\"string\"},\"body\":{\"type\":\"string\"}},\"required\":[\"to\",\"subject\",\"body\"]}'/>\n"
-    "<tool name=\"set_reminder\" description=\"Set a timed reminder or alarm that fires after a delay.\" schema='{\"type\":\"object\",\"properties\":{\"message\":{\"type\":\"string\"},\"delay_seconds\":{\"type\":\"number\"}},\"required\":[\"message\",\"delay_seconds\"]}'/>\n"
-    "</tools>\n";
+// Pre-formatted JSON block with all 5 tools (what you'd inject without ranking).
+static const char ALL_TOOLS_JSON[] =
+    "List of tools: ["
+    "{\"name\": \"get_weather\", \"description\": \"Get current weather forecast for a city or location. Returns temperature, conditions, and humidity.\", \"parameters\": {\"type\":\"object\",\"properties\":{\"location\":{\"type\":\"string\",\"description\":\"City name, e.g. San Francisco\"},\"unit\":{\"type\":\"string\",\"enum\":[\"celsius\",\"fahrenheit\"]}},\"required\":[\"location\"]}}, "
+    "{\"name\": \"calculator\", \"description\": \"Perform arithmetic calculations. Supports add, subtract, multiply, divide.\", \"parameters\": {\"type\":\"object\",\"properties\":{\"operation\":{\"type\":\"string\",\"enum\":[\"add\",\"subtract\",\"multiply\",\"divide\"]},\"x\":{\"type\":\"number\"},\"y\":{\"type\":\"number\"}},\"required\":[\"operation\",\"x\",\"y\"]}}, "
+    "{\"name\": \"search_web\", \"description\": \"Search the internet for information, articles, and current events.\", \"parameters\": {\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"}},\"required\":[\"query\"]}}, "
+    "{\"name\": \"send_email\", \"description\": \"Send an email message to a recipient with subject and body.\", \"parameters\": {\"type\":\"object\",\"properties\":{\"to\":{\"type\":\"string\"},\"subject\":{\"type\":\"string\"},\"body\":{\"type\":\"string\"}},\"required\":[\"to\",\"subject\",\"body\"]}}, "
+    "{\"name\": \"set_reminder\", \"description\": \"Set a timed reminder or alarm that fires after a delay.\", \"parameters\": {\"type\":\"object\",\"properties\":{\"message\":{\"type\":\"string\"},\"delay_seconds\":{\"type\":\"number\"}},\"required\":[\"message\",\"delay_seconds\"]}}"
+    "]\n";
 
 struct BenchResult {
     double register_ms;      // tool registration time
@@ -114,7 +114,7 @@ static BenchResult run_manual_inject(lfg_model *model, const lfg_vocab *vocab,
     lfg_session_ingest_tokens(session, prompt_toks.data(), prompt_toks.size(), true);
 
     // Manually inject all tools (no ranking, no embedding computation)
-    auto tool_toks = tokenize(vocab, ALL_TOOLS_XML, false);
+    auto tool_toks = tokenize(vocab, ALL_TOOLS_JSON, false);
     r.tool_tokens = (int)tool_toks.size();
 
     auto t0 = Clock::now();
@@ -164,6 +164,16 @@ static BenchResult run_ranked(lfg_model *model, const lfg_vocab *vocab,
 
     auto prompt_toks = tokenize(vocab, prompt, true);
     r.prompt_tokens = (int)prompt_toks.size();
+
+    // Rank tools and inject into context before prompt
+    int32_t needed = lfg_session_rank_tools(session, prompt.c_str(), (int32_t)prompt.size(), nullptr, 0);
+    if (needed > 0) {
+        std::vector<char> tool_buf(needed + 1);
+        lfg_session_rank_tools(session, prompt.c_str(), (int32_t)prompt.size(), tool_buf.data(), (int32_t)tool_buf.size());
+        auto tool_toks = tokenize(vocab, std::string(tool_buf.data(), needed), false);
+        r.tool_tokens = (int)tool_toks.size();
+        lfg_session_ingest_tokens(session, tool_toks.data(), tool_toks.size(), false);
+    }
 
     lfg_session_ingest_tokens(session, prompt_toks.data(), prompt_toks.size(), true);
 

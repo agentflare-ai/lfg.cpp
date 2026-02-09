@@ -8,14 +8,12 @@
 #include <vector>
 
 // ---------------------------------------------------------------------------
-// Test for tool injection position bug:
-// When tools are registered, lfg_session_decode() injects <tools>...</tools>
-// XML between the prompt and the generated output. For chat_generate this
-// means the XML appears AFTER <|im_start|>assistant\n, breaking the chat
-// template structure and confusing small models.
-//
-// After the fix, tool XML is injected INTO the system message before template
-// application, so the model sees it as part of the prompt context.
+// Test for tool injection via chat_generate / prompt_generate:
+// Tool JSON is injected INTO the system message (chat_generate) or prepended
+// to the prompt text (prompt_generate) before template application, so the
+// model sees it as part of the prompt context. Low-level API users can call
+// lfg_session_rank_tools() to get the formatted tool list and inject it
+// with their own framing.
 // ---------------------------------------------------------------------------
 
 static const char *MODEL_350M =
@@ -93,7 +91,7 @@ static std::string strip_thinking(const std::string &s) {
 // 350M model — fast regression tests
 // ===========================================================================
 
-TEST_CASE("350M: chat_generate with tools does not produce XML in output") {
+TEST_CASE("350M: chat_generate with tools does not produce tool JSON in output") {
     test_env env;
     REQUIRE(setup(&env, MODEL_350M));
 
@@ -115,13 +113,13 @@ TEST_CASE("350M: chat_generate with tools does not produce XML in output") {
     MESSAGE("Output: ", st.text);
     CHECK(r.n_tokens > 0);
 
-    // The generated output should NOT start with or contain raw <tools> XML.
-    // Before the fix, tool XML was injected after the assistant turn marker,
-    // causing it to appear as generated text.
-    CHECK_MESSAGE(!contains(st.text, "<tools>"),
-        "Generated output should not contain raw <tools> XML");
-    CHECK_MESSAGE(!contains(st.text, "<tool name="),
-        "Generated output should not contain raw <tool name= XML");
+    // The generated output should NOT start with or contain raw tool JSON.
+    // Before the fix, tool definitions were injected after the assistant turn
+    // marker, causing them to appear as generated text.
+    CHECK_MESSAGE(!contains(st.text, "List of tools:"),
+        "Generated output should not contain raw tool list JSON");
+    CHECK_MESSAGE(!contains(st.text, "\"name\":"),
+        "Generated output should not contain raw tool JSON");
 
     teardown(&env);
 }
@@ -146,7 +144,7 @@ TEST_CASE("350M: prompt_generate with tools does not crash") {
     MESSAGE("Output: ", st.text);
     CHECK(r.n_tokens > 0);
     // For raw prompts without chat template structure, the model may echo tool
-    // XML since there's no system/assistant framing. The key fix is for
+    // definitions since there's no system/assistant framing. The key fix is for
     // chat_generate which properly wraps tools in the system message.
     // Here we just verify it doesn't crash.
     CHECK(!st.text.empty());
@@ -176,7 +174,7 @@ TEST_CASE("350M: chat_generate multi-turn with tools — reset and re-inject") {
         lfg_generate_result r = lfg_session_chat_generate(env.session, msgs, 2, gc);
         MESSAGE("Turn 1: ", st.text);
         CHECK(r.n_tokens > 0);
-        CHECK(!contains(st.text, "<tools>"));
+        CHECK(!contains(st.text, "List of tools:"));
     }
 
     // Reset and second turn (tools_injected resets → re-ranking)
@@ -196,7 +194,7 @@ TEST_CASE("350M: chat_generate multi-turn with tools — reset and re-inject") {
         lfg_generate_result r = lfg_session_chat_generate(env.session, msgs, 2, gc);
         MESSAGE("Turn 2: ", st.text);
         CHECK(r.n_tokens > 0);
-        CHECK(!contains(st.text, "<tools>"));
+        CHECK(!contains(st.text, "List of tools:"));
     }
 
     teardown(&env);
@@ -271,9 +269,9 @@ TEST_CASE("Thinking: chat_generate with tools produces coherent output") {
     CHECK(r.n_tokens > 0);
     CHECK(!response.empty());
 
-    // Must not leak raw tool XML into generated output
-    CHECK(!contains(response, "<tools>"));
-    CHECK(!contains(response, "<tool name="));
+    // Must not leak raw tool JSON into generated output
+    CHECK(!contains(response, "List of tools:"));
+    CHECK(!contains(response, "\"name\":"));
 
     teardown(&env);
 }
@@ -318,7 +316,7 @@ TEST_CASE("Thinking: chat_generate multi-turn with tools") {
         MESSAGE("Turn ", i + 1, ": ", response);
         CHECK(r.n_tokens > 0);
         CHECK(!response.empty());
-        CHECK(!contains(response, "<tools>"));
+        CHECK(!contains(response, "List of tools:"));
     }
 
     teardown(&env);
@@ -381,7 +379,7 @@ TEST_CASE("Thinking: chat_generate without system message — tools still work")
 
     REQUIRE(lfg_session_register_tools(env.session, TOOLS, N_TOOLS, 2) == N_TOOLS);
 
-    // No system message — tool XML should be injected as a new system message
+    // No system message — tool JSON should be injected as a new system message
     lfg_chat_message msgs[] = {
         {"user", "What is the weather in London?"},
     };
@@ -400,7 +398,7 @@ TEST_CASE("Thinking: chat_generate without system message — tools still work")
     // Model may produce only thinking content with no visible response when
     // there is no system message.  Use WARN to avoid hard failure.
     WARN(!response.empty());
-    CHECK(!contains(response, "<tools>"));
+    CHECK(!contains(response, "List of tools:"));
 
     teardown(&env);
 }

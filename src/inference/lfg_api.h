@@ -119,7 +119,7 @@ LFG_API void lfg_checkpoint_free(lfg_checkpoint * checkpoint);
 typedef struct lfg_tool_desc {
     const char * name;
     const char * description;
-    const char * json_schema;  // nullable
+    const char * parameters;   // JSON Schema object, nullable
 } lfg_tool_desc;
 
 // Register tools with the session. Computes & caches embeddings internally.
@@ -131,6 +131,13 @@ LFG_API int32_t lfg_session_register_tools(lfg_session * session,
 
 // Clear registered tools and free tool context.
 LFG_API void lfg_session_clear_tools(lfg_session * session);
+
+// Rank registered tools against query text. Writes formatted tool list to buf.
+// Returns bytes written (excluding NUL), or required size if buf is NULL/buf_size is 0.
+// Returns -1 on error or if no tools are registered.
+LFG_API int32_t lfg_session_rank_tools(lfg_session * session,
+                                       const char * query, int32_t query_len,
+                                       char * buf, int32_t buf_size);
 
 // --- Entropy Monitor API ---
 
@@ -306,6 +313,7 @@ typedef enum {
     LFG_STOP_EOS        = 0,  // End-of-generation token
     LFG_STOP_MAX_TOKENS = 1,  // Hit max_tokens limit
     LFG_STOP_CALLBACK   = 2,  // Token callback returned STOP
+    LFG_STOP_TOOL_CALL  = 3,  // Model emitted <|tool_call_end|>
 } lfg_stop_reason;
 
 typedef struct lfg_generate_result {
