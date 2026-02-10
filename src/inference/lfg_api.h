@@ -129,10 +129,21 @@ LFG_API void lfg_checkpoint_free(lfg_checkpoint * checkpoint);
 
 // --- Tool Ranking API ---
 
+// Tool function pointer for auto-execution. Takes JSON arguments string,
+// returns a malloc'd result string (engine calls free()). Return NULL for error.
+typedef const char * (*lfg_tool_fn)(const char *arguments, void *user_data);
+
+// Observation callback — fired after each tool execution during auto-execution.
+typedef void (*lfg_tool_call_cb)(
+    const lfg_tool_call *call, const char *result, int32_t result_len,
+    int32_t round, void *user_data);
+
 typedef struct lfg_tool_desc {
     const char * name;
     const char * description;
     const char * parameters;   // JSON Schema object, nullable
+    lfg_tool_fn  fn;           // NULL = consumer handles (LFG_STOP_TOOL_CALL)
+    void *       fn_user_data;
 } lfg_tool_desc;
 
 // Register tools with the session. Computes & caches embeddings internally.
@@ -319,6 +330,11 @@ typedef struct lfg_generate_config {
     void                     * confidence_cb_data;
     lfg_generate_surprise_cb   surprise_cb;
     void                     * surprise_cb_data;
+
+    // Auto tool execution (observational callback + round limit)
+    lfg_tool_call_cb           tool_call_cb;       // nullable, fired after each auto-executed tool call
+    void                     * tool_call_cb_data;
+    int32_t                    max_tool_rounds;     // 0 = default (5)
 } lfg_generate_config;
 
 // Why generation stopped.
@@ -335,6 +351,7 @@ typedef struct lfg_generate_result {
     int32_t          n_confidence_spans;  // Number of confidence events fired during generation
     int32_t          n_surprise_events;   // 0 or 1 — whether input surprise event was produced
     int32_t          n_tool_calls;        // Number of parsed tool calls (0 if none or non-tool-call stop)
+    int32_t          n_tool_rounds;       // Auto-execution rounds completed (0 if no auto-execution)
     lfg_stop_reason  stop_reason;         // Why generation stopped
 } lfg_generate_result;
 

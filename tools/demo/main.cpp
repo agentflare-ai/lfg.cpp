@@ -100,46 +100,142 @@ struct ToolRankingEntry {
 };
 
 // ---------------------------------------------------------------------------
+// Simple tool executors for demo (lfg_tool_fn callbacks)
+// ---------------------------------------------------------------------------
+
+// Tiny expression evaluator: handles +, -, *, / with parentheses, integer/float operands.
+static double eval_expr(const char *&s);
+
+static double eval_atom(const char *&s) {
+    while (*s == ' ') s++;
+    bool neg = false;
+    if (*s == '-') { neg = true; s++; }
+    double val;
+    if (*s == '(') {
+        s++; // skip '('
+        val = eval_expr(s);
+        if (*s == ')') s++;
+    } else {
+        char *end;
+        val = std::strtod(s, &end);
+        s = end;
+    }
+    return neg ? -val : val;
+}
+
+static double eval_term(const char *&s) {
+    double val = eval_atom(s);
+    while (*s == ' ') s++;
+    while (*s == '*' || *s == '/') {
+        char op = *s++;
+        double rhs = eval_atom(s);
+        if (op == '*') val *= rhs; else if (rhs != 0) val /= rhs;
+        while (*s == ' ') s++;
+    }
+    return val;
+}
+
+static double eval_expr(const char *&s) {
+    double val = eval_term(s);
+    while (*s == ' ') s++;
+    while (*s == '+' || *s == '-') {
+        char op = *s++;
+        double rhs = eval_term(s);
+        if (op == '+') val += rhs; else val -= rhs;
+        while (*s == ' ') s++;
+    }
+    return val;
+}
+
+// Each returns a malloc'd string (engine calls free()).
+
+static const char *calculator_fn(const char *arguments, void * /*user_data*/) {
+    std::string args(arguments ? arguments : "{}");
+    size_t key_pos = args.find("\"expression\"");
+    if (key_pos == std::string::npos) return strdup("{\"error\": \"missing expression\"}");
+    size_t colon = args.find(':', key_pos);
+    if (colon == std::string::npos) return strdup("{\"error\": \"malformed args\"}");
+    size_t q1 = args.find('"', colon + 1);
+    size_t q2 = (q1 != std::string::npos) ? args.find('"', q1 + 1) : std::string::npos;
+    if (q1 == std::string::npos || q2 == std::string::npos)
+        return strdup("{\"error\": \"missing expression value\"}");
+    std::string expr = args.substr(q1 + 1, q2 - q1 - 1);
+    const char *p = expr.c_str();
+    double result = eval_expr(p);
+    char buf[128];
+    if (result == (double)(long long)result && std::fabs(result) < 1e15) {
+        std::snprintf(buf, sizeof(buf), "{\"result\": %lld}", (long long)result);
+    } else {
+        std::snprintf(buf, sizeof(buf), "{\"result\": %.6g}", result);
+    }
+    return strdup(buf);
+}
+
+static const char *weather_fn(const char * /*arguments*/, void * /*user_data*/) {
+    return strdup(R"({"temperature": 22, "condition": "sunny", "humidity": 45})");
+}
+
+static const char *search_web_fn(const char * /*arguments*/, void * /*user_data*/) {
+    return strdup(R"({"results": [{"title": "Example result", "snippet": "This is a demo search result."}]})");
+}
+
+static const char *generic_tool_fn(const char * /*arguments*/, void * /*user_data*/) {
+    return strdup(R"({"status": "ok", "note": "stub response"})");
+}
+
+// ---------------------------------------------------------------------------
 // Example tools for tool ranking visualization
 // ---------------------------------------------------------------------------
 
 static const lfg_tool_desc EXAMPLE_TOOLS[] = {
     {"get_weather",
      "Get the current weather forecast for a given location",
-     R"({"type":"object","properties":{"location":{"type":"string","description":"City or coordinates"},"units":{"type":"string","enum":["celsius","fahrenheit"]}},"required":["location"]})"},
+     R"({"type":"object","properties":{"location":{"type":"string","description":"City or coordinates"},"units":{"type":"string","enum":["celsius","fahrenheit"]}},"required":["location"]})",
+     weather_fn, nullptr},
     {"search_web",
      "Search the internet for information on a topic",
-     R"({"type":"object","properties":{"query":{"type":"string","description":"Search query"},"num_results":{"type":"integer","description":"Number of results to return"}},"required":["query"]})"},
+     R"({"type":"object","properties":{"query":{"type":"string","description":"Search query"},"num_results":{"type":"integer","description":"Number of results to return"}},"required":["query"]})",
+     search_web_fn, nullptr},
     {"send_email",
      "Send an email message to a recipient",
-     R"({"type":"object","properties":{"to":{"type":"string","description":"Recipient email address"},"subject":{"type":"string"},"body":{"type":"string"}},"required":["to","subject","body"]})"},
+     R"({"type":"object","properties":{"to":{"type":"string","description":"Recipient email address"},"subject":{"type":"string"},"body":{"type":"string"}},"required":["to","subject","body"]})",
+     generic_tool_fn, nullptr},
     {"calculator",
      "Evaluate an arithmetic or mathematical expression",
-     R"({"type":"object","properties":{"expression":{"type":"string","description":"Math expression to evaluate"}},"required":["expression"]})"},
+     R"({"type":"object","properties":{"expression":{"type":"string","description":"Math expression to evaluate"}},"required":["expression"]})",
+     calculator_fn, nullptr},
     {"set_reminder",
      "Set a timed reminder with a message",
-     R"json({"type":"object","properties":{"message":{"type":"string"},"time":{"type":"string","description":"When to remind (ISO 8601 or natural language)"}},"required":["message","time"]})json"},
+     R"json({"type":"object","properties":{"message":{"type":"string"},"time":{"type":"string","description":"When to remind (ISO 8601 or natural language)"}},"required":["message","time"]})json",
+     generic_tool_fn, nullptr},
     {"create_calendar_event",
      "Create a calendar event with a title, time, and optional attendees",
-     R"({"type":"object","properties":{"title":{"type":"string"},"start_time":{"type":"string"},"end_time":{"type":"string"},"attendees":{"type":"array","items":{"type":"string"}}},"required":["title","start_time"]})"},
+     R"({"type":"object","properties":{"title":{"type":"string"},"start_time":{"type":"string"},"end_time":{"type":"string"},"attendees":{"type":"array","items":{"type":"string"}}},"required":["title","start_time"]})",
+     generic_tool_fn, nullptr},
     {"translate_text",
      "Translate text from one language to another",
-     R"({"type":"object","properties":{"text":{"type":"string"},"source_language":{"type":"string"},"target_language":{"type":"string"}},"required":["text","target_language"]})"},
+     R"({"type":"object","properties":{"text":{"type":"string"},"source_language":{"type":"string"},"target_language":{"type":"string"}},"required":["text","target_language"]})",
+     generic_tool_fn, nullptr},
     {"get_stock_price",
      "Look up the current stock price for a ticker symbol",
-     R"({"type":"object","properties":{"symbol":{"type":"string","description":"Stock ticker symbol"}},"required":["symbol"]})"},
+     R"({"type":"object","properties":{"symbol":{"type":"string","description":"Stock ticker symbol"}},"required":["symbol"]})",
+     generic_tool_fn, nullptr},
     {"play_music",
      "Play a song or playlist by name or artist",
-     R"({"type":"object","properties":{"query":{"type":"string","description":"Song, artist, or playlist name"},"shuffle":{"type":"boolean"}},"required":["query"]})"},
+     R"({"type":"object","properties":{"query":{"type":"string","description":"Song, artist, or playlist name"},"shuffle":{"type":"boolean"}},"required":["query"]})",
+     generic_tool_fn, nullptr},
     {"set_timer",
      "Set a countdown timer for a specified duration",
-     R"({"type":"object","properties":{"duration_seconds":{"type":"integer","description":"Timer duration in seconds"},"label":{"type":"string"}},"required":["duration_seconds"]})"},
+     R"({"type":"object","properties":{"duration_seconds":{"type":"integer","description":"Timer duration in seconds"},"label":{"type":"string"}},"required":["duration_seconds"]})",
+     generic_tool_fn, nullptr},
     {"take_screenshot",
      "Capture a screenshot of the current screen",
-     R"({"type":"object","properties":{"region":{"type":"string","description":"Full screen or window name","default":"full"}}})"},
+     R"({"type":"object","properties":{"region":{"type":"string","description":"Full screen or window name","default":"full"}}})",
+     generic_tool_fn, nullptr},
     {"read_file",
      "Read the contents of a file from the filesystem",
-     R"({"type":"object","properties":{"path":{"type":"string","description":"File path to read"},"encoding":{"type":"string","default":"utf-8"}},"required":["path"]})"},
+     R"({"type":"object","properties":{"path":{"type":"string","description":"File path to read"},"encoding":{"type":"string","default":"utf-8"}},"required":["path"]})",
+     generic_tool_fn, nullptr},
 };
 static constexpr int N_EXAMPLE_TOOLS = sizeof(EXAMPLE_TOOLS) / sizeof(EXAMPLE_TOOLS[0]);
 
@@ -207,6 +303,9 @@ struct AppState {
     bool tools_enabled = true;
     int32_t tool_top_k = 3;
     std::vector<ToolRankingEntry> tool_ranking_log;
+
+    // Pending tool call info (accumulated by tool_call_observer during generation)
+    std::string pending_tool_call_info;
 
     // Log
     std::string log_buffer;
@@ -323,92 +422,31 @@ static void confidence_callback(
     state->confidence_log.push_back(std::move(entry));
 }
 
+
 // ---------------------------------------------------------------------------
-// Simple tool executor for demo (handles calculator, stubs for others)
+// Tool call observation callback (for Tools tab logging)
 // ---------------------------------------------------------------------------
 
-// Tiny expression evaluator: handles +, -, *, / with parentheses, integer/float operands.
-static double eval_expr(const char *&s);
+static void tool_call_observer(
+    const lfg_tool_call *call, const char *result, int32_t result_len,
+    int32_t round, void *user_data)
+{
+    auto *state = static_cast<AppState *>(user_data);
+    std::lock_guard<std::mutex> lock(state->mtx);
 
-static double eval_atom(const char *&s) {
-    while (*s == ' ') s++;
-    bool neg = false;
-    if (*s == '-') { neg = true; s++; }
-    double val;
-    if (*s == '(') {
-        s++; // skip '('
-        val = eval_expr(s);
-        if (*s == ')') s++;
-    } else {
-        char *end;
-        val = std::strtod(s, &end);
-        s = end;
-    }
-    return neg ? -val : val;
-}
+    std::string name = call->name ? call->name : "?";
+    std::string args = call->arguments ? call->arguments : "{}";
+    std::string id   = call->id ? call->id : "?";
+    std::string res(result, result_len);
 
-static double eval_term(const char *&s) {
-    double val = eval_atom(s);
-    while (*s == ' ') s++;
-    while (*s == '*' || *s == '/') {
-        char op = *s++;
-        double rhs = eval_atom(s);
-        if (op == '*') val *= rhs; else if (rhs != 0) val /= rhs;
-        while (*s == ' ') s++;
-    }
-    return val;
-}
+    std::string info;
+    if (round > 0) info += "--- Round " + std::to_string(round + 1) + " ---\n";
+    info += name + "(" + args + ")\n";
+    info += "  id: " + id + "\n";
+    info += "  result: " + res + "\n\n";
 
-static double eval_expr(const char *&s) {
-    double val = eval_term(s);
-    while (*s == ' ') s++;
-    while (*s == '+' || *s == '-') {
-        char op = *s++;
-        double rhs = eval_term(s);
-        if (op == '+') val += rhs; else val -= rhs;
-        while (*s == ' ') s++;
-    }
-    return val;
-}
-
-static std::string execute_tool(const char *name, const char *arguments) {
-    if (!name) return "{\"error\": \"no tool name\"}";
-
-    if (std::strcmp(name, "calculator") == 0) {
-        // Parse "expression" from JSON args: {"expression": "2 + 2"}
-        std::string args(arguments ? arguments : "{}");
-        // Simple extraction: find "expression" value
-        size_t key_pos = args.find("\"expression\"");
-        if (key_pos == std::string::npos) return "{\"error\": \"missing expression\"}";
-        size_t colon = args.find(':', key_pos);
-        if (colon == std::string::npos) return "{\"error\": \"malformed args\"}";
-        // Find the string value
-        size_t q1 = args.find('"', colon + 1);
-        size_t q2 = (q1 != std::string::npos) ? args.find('"', q1 + 1) : std::string::npos;
-        if (q1 == std::string::npos || q2 == std::string::npos)
-            return "{\"error\": \"missing expression value\"}";
-        std::string expr = args.substr(q1 + 1, q2 - q1 - 1);
-        const char *p = expr.c_str();
-        double result = eval_expr(p);
-        // Format result — use integer format if it's a whole number
-        char buf[64];
-        if (result == (double)(long long)result && std::fabs(result) < 1e15) {
-            std::snprintf(buf, sizeof(buf), "%lld", (long long)result);
-        } else {
-            std::snprintf(buf, sizeof(buf), "%.6g", result);
-        }
-        return std::string("{\"result\": ") + buf + "}";
-    }
-
-    if (std::strcmp(name, "get_weather") == 0) {
-        return R"({"temperature": 22, "condition": "sunny", "humidity": 45})";
-    }
-    if (std::strcmp(name, "search_web") == 0) {
-        return R"({"results": [{"title": "Example result", "snippet": "This is a demo search result."}]})";
-    }
-
-    // Generic stub for unimplemented tools
-    return std::string("{\"status\": \"ok\", \"note\": \"stub response for ") + name + "\"}";
+    // Append to the pending tool call info for this generation
+    state->pending_tool_call_info += info;
 }
 
 // ---------------------------------------------------------------------------
@@ -422,10 +460,14 @@ static void inference_thread_func(AppState *state) {
     {
         std::lock_guard<std::mutex> lock(state->mtx);
         msgs_copy = state->messages;
+        state->pending_tool_call_info.clear();
         gen_cfg = lfg_generate_default_config();
         gen_cfg.max_tokens = state->gen_max_tokens;
         gen_cfg.token_cb = token_callback;
         gen_cfg.token_cb_data = state;
+        // Auto tool execution: tool_call_observer logs to Tools tab
+        gen_cfg.tool_call_cb = tool_call_observer;
+        gen_cfg.tool_call_cb_data = state;
         if (state->surprise_enabled) {
             gen_cfg.surprise_cb = surprise_callback;
             gen_cfg.surprise_cb_data = state;
@@ -458,102 +500,11 @@ static void inference_thread_func(AppState *state) {
         c_msgs.push_back(cm);
     }
 
+    // Single call — engine handles tool execution + KV cache continuation internally
     lfg_generate_result result = lfg_session_chat_generate(
         state->session,
         c_msgs.data(), c_msgs.size(),
         gen_cfg);
-
-    // Tool call loop: execute tools and re-generate until model produces a
-    // non-tool-call response (max 5 rounds to prevent infinite loops).
-    // Intermediate messages (raw assistant output with tool markers, tool results)
-    // are kept ONLY in the c_msgs API array — state->messages stays clean for the UI.
-    std::string tool_call_info;
-    // Accumulate intermediate messages separately from UI-visible chat history.
-    // These hold the raw assistant output (with <|tool_call_start|> markers) and
-    // tool result messages that the model needs to see but the user shouldn't.
-    struct IntermediateMsg { std::string role; std::string text; };
-    std::vector<IntermediateMsg> intermediate_msgs;
-
-    for (int tool_round = 0;
-         tool_round < 5 && result.stop_reason == LFG_STOP_TOOL_CALL;
-         tool_round++)
-    {
-        int32_t n_calls = 0;
-        const lfg_tool_call *calls = lfg_session_get_tool_calls(state->session, &n_calls);
-
-        if (tool_round > 0) tool_call_info += "--- Round " + std::to_string(tool_round + 1) + " ---\n";
-
-        // Get the raw assistant output (with <|tool_call_start|>...<|tool_call_end|>
-        // markers) that the model needs in history per LFM2.5 protocol.
-        // This goes into intermediate_msgs, NOT state->messages.
-        {
-            int32_t raw_len = 0;
-            const char *raw_ptr = lfg_session_get_last_output(state->session, &raw_len);
-            std::string raw_assistant;
-            if (raw_ptr && raw_len > 0) {
-                raw_assistant.assign(raw_ptr, static_cast<size_t>(raw_len));
-            }
-            intermediate_msgs.push_back({"assistant", std::move(raw_assistant)});
-        }
-
-        // Execute each tool call, log it, and add results to intermediate_msgs
-        for (int32_t tc = 0; tc < n_calls; ++tc) {
-            std::string name = calls[tc].name ? calls[tc].name : "?";
-            std::string args = calls[tc].arguments ? calls[tc].arguments : "{}";
-            std::string id   = calls[tc].id ? calls[tc].id : "?";
-
-            std::string tool_result = execute_tool(calls[tc].name, calls[tc].arguments);
-
-            tool_call_info += name + "(" + args + ")\n";
-            tool_call_info += "  id: " + id + "\n";
-            tool_call_info += "  result: " + tool_result + "\n\n";
-
-            intermediate_msgs.push_back({"tool", std::move(tool_result)});
-        }
-
-        // Clear pending output for the continuation — the existing empty assistant
-        // message in state->messages will receive the next generation's tokens
-        {
-            std::lock_guard<std::mutex> lock(state->mtx);
-            state->pending_output.clear();
-        }
-
-        // Build c_msgs: original messages (minus trailing empty assistant) +
-        // intermediate messages (raw assistant + tool results)
-        std::vector<ChatMessage> base_msgs_copy;
-        {
-            std::lock_guard<std::mutex> lock(state->mtx);
-            base_msgs_copy = state->messages;
-        }
-        c_msgs.clear();
-        for (size_t i = 0; i < base_msgs_copy.size(); ++i) {
-            auto &m = base_msgs_copy[i];
-            // Skip trailing empty assistant placeholder
-            if (i == base_msgs_copy.size() - 1 && m.role == "assistant" && m.text.empty()) {
-                continue;
-            }
-            lfg_chat_message cm{};
-            cm.role = m.role.c_str();
-            cm.content = m.text.c_str();
-            c_msgs.push_back(cm);
-        }
-        // Append intermediate messages (raw assistant outputs + tool results)
-        for (auto &im : intermediate_msgs) {
-            lfg_chat_message cm{};
-            cm.role = im.role.c_str();
-            cm.content = im.text.c_str();
-            c_msgs.push_back(cm);
-        }
-
-        // Reset session so chat_generate re-ingests the full conversation
-        lfg_session_reset(state->session);
-
-        // Re-generate with the tool results in context
-        result = lfg_session_chat_generate(
-            state->session,
-            c_msgs.data(), c_msgs.size(),
-            gen_cfg);
-    }
 
     // Capture the formatted prompt for the Context tab
     int32_t prompt_len = 0;
@@ -609,7 +560,8 @@ static void inference_thread_func(AppState *state) {
                 state->context_log.push_back(std::move(ctx_entry));
             }
         }
-        // Store tool ranking entry (includes structured calls if present)
+        // Store tool ranking entry (includes auto-executed tool calls if any)
+        std::string tool_call_info = state->pending_tool_call_info;
         if (!rank_output.empty() || !tool_call_info.empty()) {
             int turn = 0;
             for (auto &m : state->messages) {
@@ -976,6 +928,27 @@ static void draw_chat_panel(AppState *state) {
                 selectable_text(out_id, output);
             }
 
+            // Show tool execution info as dim collapsed section
+            // (only for the last assistant message, after generation completes)
+            if (!state->generating && i == state->messages.size() - 1 &&
+                state->last_result.n_tool_rounds > 0 &&
+                !state->pending_tool_call_info.empty()) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.7f, 0.3f, 0.8f));
+                char tc_header[64];
+                snprintf(tc_header, sizeof(tc_header), "Tool calls (%d round%s)##tc%d",
+                         state->last_result.n_tool_rounds,
+                         state->last_result.n_tool_rounds > 1 ? "s" : "",
+                         (int)i);
+                if (ImGui::TreeNode(tc_header)) {
+                    char tc_id[32];
+                    snprintf(tc_id, sizeof(tc_id), "##tcinfo%d", (int)i);
+                    ImVec4 tc_color(1.0f, 0.7f, 0.3f, 0.8f);
+                    selectable_text(tc_id, state->pending_tool_call_info, &tc_color);
+                    ImGui::TreePop();
+                }
+                ImGui::PopStyleColor();
+            }
+
             // Show thinking as dim collapsed section below
             if (!thinking.empty()) {
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 0.7f));
@@ -1078,7 +1051,17 @@ static void draw_status_bar(AppState *state) {
 
     if (state->generating) {
         double elapsed = glfwGetTime() - state->gen_start_time;
-        ImGui::Text("Generating... (%.1fs)", elapsed);
+        bool has_tool_calls = false;
+        {
+            std::lock_guard<std::mutex> lock(state->mtx);
+            has_tool_calls = !state->pending_tool_call_info.empty();
+        }
+        if (has_tool_calls) {
+            ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f),
+                "Executing tools... (%.1fs)", elapsed);
+        } else {
+            ImGui::Text("Generating... (%.1fs)", elapsed);
+        }
     } else if (state->last_result.n_tokens > 0) {
         float tps = state->gen_elapsed > 0.0 ?
             static_cast<float>(state->last_result.n_tokens) / static_cast<float>(state->gen_elapsed) : 0.0f;
@@ -1091,8 +1074,14 @@ static void draw_status_bar(AppState *state) {
             case LFG_STOP_TOOL_CALL:  stop_str = "tool_call"; break;
         }
 
-        ImGui::Text("Tokens: %d | %.1f tok/s | Stop: %s",
-                     state->last_result.n_tokens, tps, stop_str);
+        if (state->last_result.n_tool_rounds > 0) {
+            ImGui::Text("Tokens: %d | %.1f tok/s | Stop: %s | Tool rounds: %d",
+                         state->last_result.n_tokens, tps, stop_str,
+                         state->last_result.n_tool_rounds);
+        } else {
+            ImGui::Text("Tokens: %d | %.1f tok/s | Stop: %s",
+                         state->last_result.n_tokens, tps, stop_str);
+        }
     } else {
         ImGui::Text("Ready");
     }

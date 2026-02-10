@@ -174,6 +174,8 @@ struct lfg_session {
         int32_t  json_text_len;        // strlen of json_text
         int32_t  token_cost;           // token count of json_text
         float   *embedding;           // malloc'd, L2-normalized, size = n_embd
+        lfg_tool_fn  fn;              // auto-execution callback (NULL = consumer handles)
+        void        *fn_user_data;
     };
 
     lfg_context     *tool_ctx;         // Separate context for computing tool embeddings
@@ -1978,6 +1980,8 @@ LFG_API int32_t lfg_session_register_tools(lfg_session * session,
             entry.json_text = tool_format_json(&tools[i], &json_len);
             entry.json_text_len = json_len;
             entry.name = strdup(tools[i].name ? tools[i].name : "");
+            entry.fn = tools[i].fn;
+            entry.fn_user_data = tools[i].fn_user_data;
             total_json_bytes += json_len;
 
             uint64_t hash = fnv1a_hash(entry.json_text, json_len);
@@ -2938,6 +2942,106 @@ static void session_ensure_raw_output_cap(lfg_session * s, int32_t needed) {
 }
 
 // ---------------------------------------------------------------------------
+// Auto tool execution helpers
+// ---------------------------------------------------------------------------
+
+// Check that ALL parsed tool calls have a matching registered entry with non-NULL fn.
+// Returns false if any call targets a tool without fn (no partial execution).
+static bool session_can_auto_execute_tools(lfg_session *session) {
+    if (session->parsed_tool_call_count == 0) return false;
+    for (int32_t i = 0; i < session->parsed_tool_call_count; ++i) {
+        const char *name = session->parsed_tool_calls[i].name;
+        if (!name) return false;
+        bool found = false;
+        for (int32_t j = 0; j < session->tool_count; ++j) {
+            if (session->tool_entries[j].fn &&
+                std::strcmp(session->tool_entries[j].name, name) == 0) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) return false;
+    }
+    return true;
+}
+
+// Execute all parsed tool calls and ingest a continuation into the KV cache.
+// Returns true on success (caller should set auto_continue = true).
+static bool session_execute_and_continue(
+    lfg_session *session, const lfg_generate_config *config,
+    lfg_generate_result *result, int32_t round)
+{
+    const lfg_vocab *vocab = lfg_model_get_vocab(session->model);
+
+    // Build combined tool results for all calls
+    std::string continuation;
+
+    // <|tool_call_end|> was sampled but NOT ingested (break happens before ingest at line ~3300).
+    // It needs to be part of the continuation we tokenize.
+    continuation += "<|tool_call_end|><|im_end|>\n";
+
+    for (int32_t i = 0; i < session->parsed_tool_call_count; ++i) {
+        const lfg_tool_call *call = &session->parsed_tool_calls[i];
+
+        // Look up fn + fn_user_data from matching tool_entries[]
+        lfg_tool_fn fn = nullptr;
+        void *fn_ud = nullptr;
+        for (int32_t j = 0; j < session->tool_count; ++j) {
+            if (std::strcmp(session->tool_entries[j].name, call->name) == 0) {
+                fn = session->tool_entries[j].fn;
+                fn_ud = session->tool_entries[j].fn_user_data;
+                break;
+            }
+        }
+        if (!fn) return false;  // should not happen — checked by can_auto_execute
+
+        const char *result_str = fn(call->arguments, fn_ud);
+        if (!result_str) result_str = strdup("{\"error\": \"tool returned null\"}");
+
+        // Fire observation callback
+        if (config->tool_call_cb) {
+            config->tool_call_cb(call, result_str, (int32_t)std::strlen(result_str),
+                                 round, config->tool_call_cb_data);
+        }
+
+        continuation += "<|im_start|>tool\n";
+        continuation += result_str;
+        continuation += "<|im_end|>\n";
+
+        free((void *)result_str);
+    }
+
+    continuation += "<|im_start|>assistant\n";
+
+    // Tokenize with parse_special=true for <|...|> tokens
+    int32_t cont_len = (int32_t)continuation.size();
+    int32_t tok_cap = cont_len + 32;
+    lfg_token *toks = (lfg_token *)malloc(tok_cap * sizeof(lfg_token));
+    int32_t n_toks = lfg_tokenize(vocab, continuation.c_str(), cont_len,
+                                   toks, tok_cap, false, true);
+    if (n_toks < 0) {
+        tok_cap = -n_toks;
+        toks = (lfg_token *)realloc(toks, tok_cap * sizeof(lfg_token));
+        n_toks = lfg_tokenize(vocab, continuation.c_str(), cont_len,
+                               toks, tok_cap, false, true);
+    }
+
+    if (n_toks <= 0) {
+        free(toks);
+        return false;
+    }
+
+    // Ingest via session_ingest_internal — appends to KV at current n_past
+    bool ok = session_ingest_internal(session, toks, n_toks, false);
+    free(toks);
+
+    if (!ok) return false;
+
+    result->n_tool_rounds = round + 1;
+    return true;
+}
+
+// ---------------------------------------------------------------------------
 // Generate Loop API
 // ---------------------------------------------------------------------------
 
@@ -2953,6 +3057,9 @@ LFG_API lfg_generate_config lfg_generate_default_config(void) {
     cfg.confidence_cb_data = nullptr;
     cfg.surprise_cb = nullptr;
     cfg.surprise_cb_data = nullptr;
+    cfg.tool_call_cb = nullptr;
+    cfg.tool_call_cb_data = nullptr;
+    cfg.max_tool_rounds = 0;
     return cfg;
 }
 
@@ -3045,7 +3152,17 @@ LFG_API lfg_generate_result lfg_session_generate(
 
     session->last_stop_len = 0;
 
-    for (int32_t i = 0; i < max_tokens; ++i) {
+    // Auto tool execution state
+    int32_t max_tool_rounds = config.max_tool_rounds > 0 ? config.max_tool_rounds : 5;
+    int32_t tool_round = 0;
+    int32_t tokens_remaining = max_tokens;
+    int32_t total_tokens = 0;  // accumulated across all rounds
+    bool auto_continue = true;
+
+    while (auto_continue) {
+    auto_continue = false;
+
+    for (int32_t i = 0; i < tokens_remaining; ++i) {
         lfg_session_decode(session);
         lfg_token tok = lfg_session_sample(session);
 
@@ -3074,6 +3191,7 @@ LFG_API lfg_generate_result lfg_session_generate(
         if (session->tool_call_end_token != LFG_TOKEN_NULL &&
             tok == session->tool_call_end_token) {
             result.stop_reason = LFG_STOP_TOOL_CALL;
+            total_tokens += i + 1;
             stopped = true;
             break;
         }
@@ -3124,6 +3242,7 @@ LFG_API lfg_generate_result lfg_session_generate(
             if (!stopped) {
                 result.stop_reason = LFG_STOP_EOS;
             }
+            total_tokens += i + 1;
             stopped = true;
             break;
         }
@@ -3176,8 +3295,6 @@ LFG_API lfg_generate_result lfg_session_generate(
                 result.n_confidence_spans++;
             }
         }
-
-        result.n_tokens = i + 1;
 
         // Token callback with stop look-ahead buffering (token + text level)
         if (stop_buf_cap > 0) {
@@ -3258,6 +3375,7 @@ LFG_API lfg_generate_result lfg_session_generate(
                         else
                             result.stop_reason = LFG_STOP_EOS;
                     }
+                    total_tokens += i + 1;
                     stopped = true;
                     stop_buf_count = 0;
                     break;
@@ -3314,6 +3432,7 @@ LFG_API lfg_generate_result lfg_session_generate(
     }
 
     if (!stopped) {
+        total_tokens += tokens_remaining;
         result.stop_reason = LFG_STOP_MAX_TOKENS;
     }
 
@@ -3322,6 +3441,38 @@ LFG_API lfg_generate_result lfg_session_generate(
         result.n_tool_calls = parse_tool_calls_from_raw_output(
             session, session->last_raw_output, session->last_raw_output_len);
     }
+
+    // --- Auto tool execution: if all calls have fn callbacks, execute and continue ---
+    if (result.stop_reason == LFG_STOP_TOOL_CALL &&
+        tool_round < max_tool_rounds &&
+        session_can_auto_execute_tools(session))
+    {
+        if (session_execute_and_continue(session, &config, &result, tool_round)) {
+            // Decrease remaining tokens by what this round consumed
+            tokens_remaining = max_tokens - total_tokens;
+            if (tokens_remaining <= 0) {
+                // No budget left — keep TOOL_CALL stop reason
+                break;
+            }
+
+            // Reset per-round state for next generation round
+            tool_round++;
+            stopped = false;
+            stop_buf_count = 0;
+            session->in_tool_call = false;
+            session->last_raw_output_len = 0;
+            session->tool_call_text_len = 0;
+            session_free_tool_calls(session);
+            result.n_tool_calls = 0;
+            result.stop_reason = LFG_STOP_EOS;  // reset — will be set by next round
+            session->last_stop_len = 0;
+            auto_continue = true;
+        }
+    }
+
+    } // while (auto_continue)
+
+    result.n_tokens = total_tokens;
 
     // Post-loop: flush any in-progress confidence run as a final event
     if (session->confidence_active &&
