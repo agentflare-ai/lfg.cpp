@@ -198,7 +198,9 @@ struct lfg_session {
     lfg_token       *tool_token_buf;      // malloc'd, for tokenized tool block
     int32_t          tool_token_buf_cap;
 
-    int32_t          tool_top_k;            // 0 = disabled
+    int32_t              tool_top_k;            // 0 = disabled
+    lfg_tool_score_mode  tool_score_mode;
+    float                tool_min_score;
     bool             tools_injected;       // Reset on session_reset()
 
     // Entropy monitor config
@@ -240,6 +242,10 @@ struct lfg_session {
 
     // Confidence reasoning gating
     bool                 confidence_include_reasoning;
+
+    // Confidence span text buffer (realloc'd, valid until next pop)
+    char                *confidence_text_buf;
+    int32_t              confidence_text_cap;
 
     // Surprise monitor (input novelty — single aggregate event per ingestion)
     float                surprise_threshold;
@@ -837,6 +843,8 @@ LFG_API lfg_session_config lfg_session_default_config(void) {
     cfg.structured_checkpointing = true;
     cfg.reasoning_budget = 0;
     cfg.max_tokens = 0;
+    cfg.tool_score_mode = LFG_TOOL_SCORE_OFF;
+    cfg.tool_min_score = 0.0f;
     cfg.sampling = lfg_sampling_default_config();
     return cfg;
 }
@@ -917,6 +925,8 @@ LFG_API lfg_session * lfg_session_create(lfg_model * model, const lfg_session_co
     s->tool_token_buf = nullptr;
     s->tool_token_buf_cap = 0;
     s->tool_top_k = 0;
+    s->tool_score_mode = cfg.tool_score_mode;
+    s->tool_min_score = cfg.tool_min_score;
     s->tools_injected = false;
 
     // Entropy monitor (all nullptr/zero — allocated in configure_entropy_monitor)
@@ -1041,6 +1051,7 @@ LFG_API void lfg_session_free(lfg_session * session) {
 
     free(session->confidence_slots);
     free(session->confidence_embd_pool);
+    free(session->confidence_text_buf);
 
     // Surprise monitor
     free(session->surprise_embd);
@@ -1404,6 +1415,30 @@ static int32_t session_rank_and_format_tools(lfg_session *session, const float *
         LFG_LOG_DEBUG("tool_rank[%d]: %s score=%.6f",
                       i, session->tool_entries[idx].name,
                       session->tool_scores[idx]);
+    }
+
+    // Gate injection based on score mode
+    if (session->tool_score_mode != LFG_TOOL_SCORE_OFF) {
+        float top_score = session->tool_scores[session->tool_score_indices[0]];
+        bool skip = false;
+
+        if (session->tool_score_mode == LFG_TOOL_SCORE_FIXED) {
+            skip = top_score < session->tool_min_score;
+        } else { // AUTO
+            float threshold = session->tool_min_score > 0.0f ? session->tool_min_score : 0.1f;
+            float sum = 0.0f;
+            for (int32_t i = 0; i < session->tool_count; ++i) {
+                sum += session->tool_scores[i];
+            }
+            float mean = sum / session->tool_count;
+            skip = (top_score - mean) < threshold;
+        }
+
+        if (skip) {
+            LFG_LOG_DEBUG("tool_inject: skipped (mode=%d top=%.4f min=%.4f)",
+                          session->tool_score_mode, top_score, session->tool_min_score);
+            return 0;
+        }
     }
 
     // Build "List of tools: [tool1, tool2, ...]" into pre-allocated buffer
@@ -2333,6 +2368,7 @@ LFG_API int32_t lfg_session_configure_confidence_monitor(
     // Free previous allocations
     free(session->confidence_slots);
     free(session->confidence_embd_pool);
+    free(session->confidence_text_buf);
 
     // One-time allocation of ring buffer + embedding pool
     session->confidence_slots     = (lfg_confidence_ring_slot *)calloc(cap, sizeof(lfg_confidence_ring_slot));
@@ -2356,6 +2392,12 @@ LFG_API int32_t lfg_session_configure_confidence_monitor(
     session->confidence_include_reasoning = config->include_reasoning;
     session->confidence_active       = true;
 
+    // Span text buffer (realloc'd on demand at pop time)
+    if (!session->confidence_text_buf) {
+        session->confidence_text_cap = 4096;
+        session->confidence_text_buf = (char *)malloc(session->confidence_text_cap);
+    }
+
     return n_embd;
 }
 
@@ -2378,6 +2420,35 @@ LFG_API bool lfg_session_confidence_pop(lfg_session * session,
             rs->embedding = slot_embd;
         } else {
             rs->event.n_embd = 0;
+        }
+    }
+
+    // Detokenize span text from token_history
+    int32_t span_n = rs->event.end_pos - rs->event.start_pos;
+    if (span_n > 0 && session->confidence_text_buf &&
+        rs->event.start_pos >= 0 &&
+        rs->event.end_pos <= (int32_t)session->token_history.size) {
+        const lfg_vocab *vocab = lfg_model_get_vocab(session->model);
+        lfg_token *span_tokens = session->token_history.data + rs->event.start_pos;
+
+        int32_t text_len = lfg_detokenize(vocab, span_tokens, span_n,
+                                           session->confidence_text_buf,
+                                           session->confidence_text_cap,
+                                           false, false);
+        if (text_len < 0) {
+            // Buffer too small — grow and retry
+            session->confidence_text_cap = -text_len + 1;
+            session->confidence_text_buf = (char *)realloc(
+                session->confidence_text_buf, session->confidence_text_cap);
+            text_len = lfg_detokenize(vocab, span_tokens, span_n,
+                                       session->confidence_text_buf,
+                                       session->confidence_text_cap,
+                                       false, false);
+        }
+        if (text_len >= 0) {
+            session->confidence_text_buf[text_len] = '\0';
+            rs->event.span_text = session->confidence_text_buf;
+            rs->event.span_text_len = text_len;
         }
     }
 

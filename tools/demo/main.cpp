@@ -100,6 +100,124 @@ struct ToolRankingEntry {
 };
 
 // ---------------------------------------------------------------------------
+// In-memory vector DB for demo RAG
+// ---------------------------------------------------------------------------
+
+enum VectorSource {
+    VECTOR_SOURCE_SURPRISE,
+    VECTOR_SOURCE_CONFIDENCE,
+};
+
+struct VectorEntry {
+    std::vector<float> embedding;
+    std::string text;
+    VectorSource source;
+    int turn_index;
+    int entry_id;
+};
+
+struct VectorSearchResult {
+    int entry_id;
+    float similarity;
+};
+
+struct RAGRetrievalLogEntry {
+    int turn_index;
+    int n_results;
+    float top_similarity;
+    std::string injection_text;
+    float trigger_entropy;
+};
+
+struct VectorDB {
+    std::mutex mtx;
+    std::vector<VectorEntry> entries;
+    int next_id = 0;
+
+    void store(const float *embedding, int n_embd, const std::string &text,
+               VectorSource source, int turn_index) {
+        std::lock_guard<std::mutex> lock(mtx);
+        VectorEntry entry;
+        entry.embedding.assign(embedding, embedding + n_embd);
+        entry.text = text;
+        entry.source = source;
+        entry.turn_index = turn_index;
+        entry.entry_id = next_id++;
+        entries.push_back(std::move(entry));
+    }
+
+    // Linear scan dot product (embeddings are L2-normalized by the engine).
+    std::vector<VectorSearchResult> search(const float *query, int n_embd,
+                                           int top_k, float min_similarity) {
+        std::lock_guard<std::mutex> lock(mtx);
+        std::vector<VectorSearchResult> results;
+        for (auto &e : entries) {
+            if ((int)e.embedding.size() != n_embd) continue;
+            float dot = 0.0f;
+            for (int i = 0; i < n_embd; i++) {
+                dot += query[i] * e.embedding[i];
+            }
+            if (dot >= min_similarity) {
+                results.push_back({e.entry_id, dot});
+            }
+        }
+        // Sort descending by similarity
+        std::sort(results.begin(), results.end(),
+                  [](const VectorSearchResult &a, const VectorSearchResult &b) {
+                      return a.similarity > b.similarity;
+                  });
+        if ((int)results.size() > top_k) {
+            results.resize(top_k);
+        }
+        return results;
+    }
+
+    // Format injection block for context insertion.
+    std::string format_injection(const std::vector<VectorSearchResult> &results) {
+        std::lock_guard<std::mutex> lock(mtx);
+        if (results.empty()) return "";
+        std::string out = "[Retrieved context]\n";
+        int idx = 1;
+        for (auto &r : results) {
+            // Find entry by id
+            const VectorEntry *found = nullptr;
+            for (auto &e : entries) {
+                if (e.entry_id == r.entry_id) { found = &e; break; }
+            }
+            if (!found) continue;
+
+            const char *source_str = (found->source == VECTOR_SOURCE_SURPRISE)
+                                     ? "input" : "output";
+            // Truncate text for injection (max 200 chars)
+            std::string text_preview = found->text;
+            if (text_preview.size() > 200) {
+                text_preview = text_preview.substr(0, 200) + "...";
+            }
+
+            char header[128];
+            snprintf(header, sizeof(header), "[%d] (from %s, turn %d, sim=%.3f)\n",
+                     idx, source_str, found->turn_index, r.similarity);
+            out += header;
+            out += text_preview + "\n\n";
+            idx++;
+        }
+        out += "[End retrieved context]";
+        return out;
+    }
+
+    void clear() {
+        std::lock_guard<std::mutex> lock(mtx);
+        entries.clear();
+        next_id = 0;
+    }
+
+    size_t size() {
+        std::lock_guard<std::mutex> lock(mtx);
+        return entries.size();
+    }
+};
+
+// ---------------------------------------------------------------------------
 // Simple tool executors for demo (lfg_tool_fn callbacks)
 // ---------------------------------------------------------------------------
 
@@ -236,6 +354,10 @@ static const lfg_tool_desc EXAMPLE_TOOLS[] = {
      "Read the contents of a file from the filesystem",
      R"({"type":"object","properties":{"path":{"type":"string","description":"File path to read"},"encoding":{"type":"string","default":"utf-8"}},"required":["path"]})",
      generic_tool_fn, nullptr},
+    {"list_tools",
+     "List all the tools and capabilities you can do",
+     R"({"type":"object","properties":{}})",
+     generic_tool_fn, nullptr},
 };
 static constexpr int N_EXAMPLE_TOOLS = sizeof(EXAMPLE_TOOLS) / sizeof(EXAMPLE_TOOLS[0]);
 
@@ -298,7 +420,6 @@ struct AppState {
 
     // Generated token IDs (for raw output with special tokens)
     std::vector<lfg_token> generated_tokens;
-
     // Tool ranking
     bool tools_enabled = true;
     int32_t tool_top_k = 3;
@@ -306,6 +427,14 @@ struct AppState {
 
     // Pending tool call info (accumulated by tool_call_observer during generation)
     std::string pending_tool_call_info;
+
+    // RAG memory
+    VectorDB vector_db;
+    bool rag_enabled = false;
+    int rag_top_k = 3;
+    float rag_min_similarity = 0.3f;
+    std::vector<RAGRetrievalLogEntry> rag_retrieval_log;
+    std::string rag_injection_buf;
 
     // Log
     std::string log_buffer;
@@ -335,7 +464,7 @@ static lfg_generate_action token_callback(
 // ---------------------------------------------------------------------------
 
 static void surprise_callback(
-    const lfg_surprise_event *event, const float * /*embedding*/, void *user_data)
+    const lfg_surprise_event *event, const float *embedding, void *user_data)
 {
     auto *state = static_cast<AppState *>(user_data);
     std::lock_guard<std::mutex> lock(state->mtx);
@@ -354,6 +483,13 @@ static void surprise_callback(
     }
     entry.turn_index = turn;
 
+    // Store embedding in vector DB for RAG (high surprise → store input)
+    if (state->rag_enabled && embedding && event->n_embd > 0) {
+        state->vector_db.store(embedding, event->n_embd,
+                               state->surprise_prompt_snapshot,
+                               VECTOR_SOURCE_SURPRISE, turn);
+    }
+
     state->surprise_log.push_back(std::move(entry));
 }
 
@@ -362,7 +498,7 @@ static void surprise_callback(
 // ---------------------------------------------------------------------------
 
 static const char *entropy_callback(
-    const lfg_entropy_event *event, const float * /*embedding*/, void *user_data)
+    const lfg_entropy_event *event, const float *embedding, void *user_data)
 {
     auto *state = static_cast<AppState *>(user_data);
     std::lock_guard<std::mutex> lock(state->mtx);
@@ -387,7 +523,27 @@ static const char *entropy_callback(
 
     state->retrieval_log.push_back(std::move(entry));
 
-    return nullptr; // Don't inject — just log
+    // RAG retrieval: search vector DB and inject context (high entropy → retrieve)
+    if (state->rag_enabled && embedding && event->n_embd > 0) {
+        auto results = state->vector_db.search(embedding, event->n_embd,
+                                                state->rag_top_k,
+                                                state->rag_min_similarity);
+        if (!results.empty()) {
+            state->rag_injection_buf = state->vector_db.format_injection(results);
+
+            RAGRetrievalLogEntry rag_entry;
+            rag_entry.turn_index = turn;
+            rag_entry.n_results = (int)results.size();
+            rag_entry.top_similarity = results[0].similarity;
+            rag_entry.injection_text = state->rag_injection_buf;
+            rag_entry.trigger_entropy = event->normalized;
+            state->rag_retrieval_log.push_back(std::move(rag_entry));
+
+            return state->rag_injection_buf.c_str();
+        }
+    }
+
+    return nullptr;
 }
 
 // ---------------------------------------------------------------------------
@@ -395,18 +551,15 @@ static const char *entropy_callback(
 // ---------------------------------------------------------------------------
 
 static void confidence_callback(
-    const lfg_confidence_event *event, const float * /*embedding*/, void *user_data)
+    const lfg_confidence_event *event, const float *embedding, void *user_data)
 {
     auto *state = static_cast<AppState *>(user_data);
     std::lock_guard<std::mutex> lock(state->mtx);
 
     ConfidenceLogEntry entry;
-    // Full text = already-drained portion + pending (we hold the lock)
-    if (!state->messages.empty() && state->messages.back().role == "assistant") {
-        entry.context_text = state->messages.back().text + state->pending_output;
-    } else {
-        entry.context_text = state->pending_output;
-    }
+    entry.context_text = (event->span_text && event->span_text_len > 0)
+        ? std::string(event->span_text, event->span_text_len)
+        : std::string();
     entry.mean_entropy = event->mean_entropy;
     entry.min_entropy = event->min_entropy;
     entry.span_length = event->span_length;
@@ -418,6 +571,14 @@ static void confidence_callback(
         if (m.role == "user") turn++;
     }
     entry.turn_index = turn;
+
+    // Store embedding in vector DB for RAG (low entropy → store output)
+    if (state->rag_enabled && embedding && event->n_embd > 0
+        && event->span_text && event->span_text_len > 0) {
+        state->vector_db.store(embedding, event->n_embd,
+                               std::string(event->span_text, event->span_text_len),
+                               VECTOR_SOURCE_CONFIDENCE, turn);
+    }
 
     state->confidence_log.push_back(std::move(entry));
 }
@@ -767,6 +928,8 @@ static void draw_model_panel(AppState *state) {
         state->model_loaded = false;
         state->model_stats = {};
         state->messages.clear();
+        state->vector_db.clear();
+        state->rag_retrieval_log.clear();
         state->log_buffer += "Model unloaded\n";
     }
     if (!can_unload) ImGui::EndDisabled();
@@ -860,7 +1023,48 @@ static void draw_settings_panel(AppState *state) {
             if (ImGui::SliderInt("Top K", &state->tool_top_k, 1, 12)) {
                 changed = true;
             }
+            static const char *score_modes[] = {"Off", "Auto", "Fixed"};
+            int mode = (int)state->session_cfg.tool_score_mode;
+            if (ImGui::Combo("Score Gate", &mode, score_modes, 3)) {
+                state->session_cfg.tool_score_mode = (lfg_tool_score_mode)mode;
+                if (mode == 1 && state->session_cfg.tool_min_score <= 0.0f)
+                    state->session_cfg.tool_min_score = 0.1f;
+                if (mode == 2 && state->session_cfg.tool_min_score <= 0.0f)
+                    state->session_cfg.tool_min_score = 0.3f;
+                changed = true;
+            }
+            if (mode == 1) {
+                if (ImGui::SliderFloat("Gap", &state->session_cfg.tool_min_score, 0.01f, 0.5f, "%.2f")) {
+                    changed = true;
+                }
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Min gap between top score and mean of all scores");
+            } else if (mode == 2) {
+                if (ImGui::SliderFloat("Threshold", &state->session_cfg.tool_min_score, 0.01f, 1.0f, "%.2f")) {
+                    changed = true;
+                }
+            }
             ImGui::TextDisabled("%d tools registered", N_EXAMPLE_TOOLS);
+            ImGui::Unindent();
+        }
+    }
+
+    if (ImGui::CollapsingHeader("RAG Memory")) {
+        ImGui::Checkbox("Enable RAG", &state->rag_enabled);
+        if (state->rag_enabled) {
+            ImGui::Indent();
+            ImGui::SliderInt("RAG Top K", &state->rag_top_k, 1, 10);
+            ImGui::SliderFloat("Min Similarity", &state->rag_min_similarity, 0.0f, 0.9f);
+            size_t db_size = state->vector_db.size();
+            ImGui::Text("Entries: %d", (int)db_size);
+            ImGui::SameLine();
+            if (ImGui::Button("Clear DB")) {
+                state->vector_db.clear();
+                state->rag_retrieval_log.clear();
+            }
+            if (!state->entropy_enabled || !state->confidence_enabled || !state->surprise_enabled) {
+                ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f),
+                    "Enable all 3 monitors for full RAG");
+            }
             ImGui::Unindent();
         }
     }
@@ -1041,6 +1245,8 @@ static void draw_chat_panel(AppState *state) {
     if (state->generating) ImGui::BeginDisabled();
     if (ImGui::Button("Clear")) {
         state->messages.clear();
+        state->vector_db.clear();
+        state->rag_retrieval_log.clear();
         if (state->session) lfg_session_reset(state->session);
     }
     if (state->generating) ImGui::EndDisabled();
@@ -1423,6 +1629,99 @@ static void draw_context_panel(AppState *state) {
     ImGui::EndChild();
 }
 
+static void draw_memory_panel(AppState *state) {
+    if (!state->rag_enabled) {
+        ImGui::TextDisabled("RAG is disabled. Enable it in Settings > RAG Memory.");
+        return;
+    }
+
+    size_t db_size = state->vector_db.size();
+    ImGui::Text("Entries: %d  |  Retrievals: %d", (int)db_size, (int)state->rag_retrieval_log.size());
+    ImGui::SameLine();
+    if (ImGui::Button("Clear All##memory")) {
+        state->vector_db.clear();
+        state->rag_retrieval_log.clear();
+        return;
+    }
+    ImGui::Separator();
+
+    // Two-column layout
+    float avail_w = ImGui::GetContentRegionAvail().x;
+    float col_w = avail_w * 0.5f - 4.0f;
+
+    // Left: Stored Entries
+    ImGui::BeginChild("MemLeft", ImVec2(col_w, 0), ImGuiChildFlags_Borders);
+    ImGui::Text("Stored Entries");
+    ImGui::Separator();
+
+    {
+        std::lock_guard<std::mutex> lock(state->vector_db.mtx);
+        for (int idx = (int)state->vector_db.entries.size() - 1; idx >= 0; idx--) {
+            auto &e = state->vector_db.entries[idx];
+            ImGui::PushID(idx + 50000);
+
+            const char *source_str = (e.source == VECTOR_SOURCE_SURPRISE)
+                                     ? "Surprise" : "Confidence";
+            char header[128];
+            snprintf(header, sizeof(header), "#%d [%s] Turn %d",
+                     e.entry_id, source_str, e.turn_index);
+
+            if (ImGui::CollapsingHeader(header)) {
+                ImGui::Indent();
+                std::string preview = e.text;
+                if (preview.size() > 300) {
+                    preview = preview.substr(0, 300) + "...";
+                }
+                ImVec4 text_color = (e.source == VECTOR_SOURCE_SURPRISE)
+                    ? ImVec4(0.7f, 0.8f, 1.0f, 1.0f)
+                    : ImVec4(0.5f, 1.0f, 0.7f, 1.0f);
+                char tid[32];
+                snprintf(tid, sizeof(tid), "##mtext%d", idx);
+                selectable_text(tid, preview, &text_color);
+                ImGui::Unindent();
+            }
+
+            ImGui::PopID();
+        }
+        if (state->vector_db.entries.empty()) {
+            ImGui::TextDisabled("No entries stored yet.");
+        }
+    }
+    ImGui::EndChild();
+
+    ImGui::SameLine();
+
+    // Right: Retrieval Log
+    ImGui::BeginChild("MemRight", ImVec2(0, 0), ImGuiChildFlags_Borders);
+    ImGui::Text("Retrieval Log");
+    ImGui::Separator();
+
+    for (int idx = (int)state->rag_retrieval_log.size() - 1; idx >= 0; idx--) {
+        auto &e = state->rag_retrieval_log[idx];
+        ImGui::PushID(idx + 60000);
+
+        char header[128];
+        snprintf(header, sizeof(header), "Turn %d  K=%d  top=%.3f  ent=%.3f",
+                 e.turn_index, e.n_results, e.top_similarity, e.trigger_entropy);
+
+        if (ImGui::CollapsingHeader(header)) {
+            ImGui::Indent();
+            ImVec4 inj_color(1.0f, 0.85f, 0.5f, 1.0f);
+            char iid[32];
+            snprintf(iid, sizeof(iid), "##rinj%d", idx);
+            selectable_text(iid, e.injection_text, &inj_color);
+            ImGui::Unindent();
+        }
+
+        ImGui::PopID();
+    }
+    if (state->rag_retrieval_log.empty()) {
+        ImGui::TextDisabled("No retrievals yet.");
+    }
+
+    ImGui::EndChild();
+}
+
 static void draw_log_panel(AppState *state) {
     if (ImGui::CollapsingHeader("Log")) {
         ImGui::BeginChild("LogScroll", ImVec2(0, 120), ImGuiChildFlags_Borders);
@@ -1536,7 +1835,7 @@ int main(int /*argc*/, char ** /*argv*/) {
 
         // Main area with tabs
         ImGui::BeginChild("MainArea", ImVec2(0, 0));
-        if (ImGui::BeginTabBar("MainTabs", ImGuiTabBarFlags_FittingPolicyScroll)) {
+        if (ImGui::BeginTabBar("MainTabs", ImGuiTabBarFlags_FittingPolicyResizeDown)) {
             if (ImGui::BeginTabItem("Chat")) {
                 draw_chat_panel(&g_state);
                 draw_status_bar(&g_state);
@@ -1600,6 +1899,19 @@ int main(int /*argc*/, char ** /*argv*/) {
             }
             if (ImGui::BeginTabItem(tools_label)) {
                 draw_tools_panel(&g_state);
+                ImGui::EndTabItem();
+            }
+            // Show memory entry count badge in tab label
+            char memory_label[64];
+            size_t mem_size = g_state.vector_db.size();
+            if (mem_size == 0) {
+                snprintf(memory_label, sizeof(memory_label), "Memory");
+            } else {
+                snprintf(memory_label, sizeof(memory_label), "Memory (%d)",
+                         (int)mem_size);
+            }
+            if (ImGui::BeginTabItem(memory_label)) {
+                draw_memory_panel(&g_state);
                 ImGui::EndTabItem();
             }
             ImGui::EndTabBar();

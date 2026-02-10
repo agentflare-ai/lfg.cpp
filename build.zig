@@ -767,6 +767,12 @@ fn addExecutables(
     addCommonExeLinks(bench_surprise, target, framework_path, private_framework_path, sysroot);
     b.installArtifact(bench_surprise);
 
+    const eval_tool_sim = addExe(b, target, optimize, "eval-tool-similarity", &[_][]const u8{"src/eval/eval_tool_similarity.cpp"}, spdlog_include, cxx_flags, framework_path, private_framework_path);
+    eval_tool_sim.linkLibrary(lfg_core);
+    eval_tool_sim.linkLibrary(ggml);
+    addCommonExeLinks(eval_tool_sim, target, framework_path, private_framework_path, sysroot);
+    b.installArtifact(eval_tool_sim);
+
     const llama_struct = addExe(b, target, optimize, "llama-structured-compare", &[_][]const u8{
         "src/eval/llama_structured_compare.cpp",
         "src/inference/json_schema_to_grammar.cpp",

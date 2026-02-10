@@ -17,6 +17,12 @@ typedef enum {
     LFG_TOOL_CALL_FORMAT_JSON     = 1,  // {"name":"func","arguments":{...}}
 } lfg_tool_call_format;
 
+typedef enum {
+    LFG_TOOL_SCORE_OFF   = 0,  // Always inject tools (default, backward compat)
+    LFG_TOOL_SCORE_AUTO  = 1,  // Skip if top score doesn't exceed mean by threshold
+    LFG_TOOL_SCORE_FIXED = 2,  // Skip if top score < threshold
+} lfg_tool_score_mode;
+
 typedef struct lfg_tool_call {
     const char * id;         // "call_0", "call_1", ...
     const char * name;       // Function name
@@ -50,6 +56,8 @@ typedef struct lfg_session_config {
     bool structured_checkpointing; // Snapshot sampler state for structured decoding.
     int reasoning_budget;          // 0 = disabled. Number of tokens allowed for reasoning.
     int32_t max_tokens;            // 0 = unlimited. Max tokens to generate per reset cycle.
+    lfg_tool_score_mode tool_score_mode;  // Tool injection gating. 0 = OFF (always inject).
+    float tool_min_score;                  // Threshold value. AUTO: gap above mean. FIXED: absolute minimum.
     lfg_sampling_config sampling;
 } lfg_session_config;
 
@@ -222,6 +230,8 @@ typedef struct lfg_confidence_event {
     int32_t     start_pos;       // n_past at span start
     int32_t     end_pos;         // n_past at span end
     int32_t     n_embd;          // Embedding dimension (for embd_out sizing)
+    const char *span_text;       // Detokenized span text (valid until next pop). NULL if unavailable.
+    int32_t     span_text_len;   // Length in bytes (excludes NUL terminator).
 } lfg_confidence_event;
 
 typedef struct lfg_confidence_monitor_config {
