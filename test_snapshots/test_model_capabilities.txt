@@ -1,0 +1,19 @@
+[basic]
+token= It
+tail= It's been a while, hasn't
+[structured]
+json={
+  "answer": "```json "
+ ,
+  "confidence": 90
+ }
+[checkpoint]
+path1=:
+A)
+path2=:
+A)
+[healing]
+healed=false
+next=ily
+[tool_call]
+json={"function": "get_stock_price", "parameters": { "symbol": "AAPL" } }

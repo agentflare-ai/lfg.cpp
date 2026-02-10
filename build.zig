@@ -642,6 +642,7 @@ fn addLiquidCore(
     core.addIncludePath(b.path("src/ggml"));
     core.addIncludePath(b.path("third_party/llama.cpp/src"));
     core.addIncludePath(b.path("third_party/llama.cpp/vendor"));
+    core.addIncludePath(b.path("third_party/llama.cpp/common"));
     core.addIncludePath(spdlog_include);
 
     // Set spdlog compile-time log level
@@ -654,6 +655,10 @@ fn addLiquidCore(
     core.addCSourceFiles(.{ .files = inf, .flags = cxx_flags });
     core.addCSourceFiles(.{ .files = inf_models, .flags = cxx_flags });
     core.addCSourceFiles(.{ .files = loader, .flags = cxx_flags });
+    core.addCSourceFiles(.{ .files = &[_][]const u8{
+        "third_party/llama.cpp/common/peg-parser.cpp",
+        "third_party/llama.cpp/common/unicode.cpp",
+    }, .flags = cxx_flags });
 
     core.linkLibrary(ggml);
     core.linkLibrary(vision);
@@ -1035,6 +1040,7 @@ fn addTests(
         "test_tool_injection",
         "test_tool_chat_integration",
         "test_chat_first_message",
+        "test_tool_call_parser",
     };
 
     const test_files = [_][]const u8{
@@ -1075,6 +1081,7 @@ fn addTests(
         "src/tests/test_tool_injection.cpp",
         "src/tests/test_tool_chat_integration.cpp",
         "src/tests/test_chat_first_message.cpp",
+        "src/tests/test_tool_call_parser.cpp",
     };
 
     var test_step = b.step("test", "Build and run tests");

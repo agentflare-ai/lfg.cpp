@@ -417,10 +417,16 @@ extern "C" {
         bool no_perf; // whether to measure performance timings
     } lfg_sampler_chain_params;
 
+    // forward-declare for lfg_chat_message (defined in lfg_api.h)
+    struct lfg_tool_call;
+
     // used in chat template
     typedef struct lfg_chat_message {
         const char * role;
         const char * content;
+        const struct lfg_tool_call * tool_calls;  // nullable — structured tool calls (OpenAI-compatible)
+        int32_t n_tool_calls;                     // 0 = none
+        const char * tool_call_id;                // for role="tool" responses (nullable)
     } lfg_chat_message;
 
     // lora adapter

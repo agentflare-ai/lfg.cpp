@@ -1,0 +1,3 @@
+bundle_source=models/lfm2-350M.gguf
+bundle_path=test_model.bundle
+load=ok

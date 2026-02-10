@@ -3,6 +3,7 @@
 #include "lfg_api.h"
 
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace liquid {
@@ -116,6 +117,23 @@ public:
     }
 
     int32_t VocabSize() { return lfg_session_get_vocab_size(handle_); }
+
+    // Structured tool call accessors
+    std::pair<const lfg_tool_call *, int32_t> GetToolCalls() {
+        int32_t n = 0;
+        const lfg_tool_call *calls = lfg_session_get_tool_calls(handle_, &n);
+        return {calls, n};
+    }
+
+    std::pair<const char *, int32_t> GetLastOutput() {
+        int32_t len = 0;
+        const char *out = lfg_session_get_last_output(handle_, &len);
+        return {out, len};
+    }
+
+    void SetToolCallFormat(lfg_tool_call_format format) {
+        lfg_session_set_tool_call_format(handle_, format);
+    }
 
     lfg_session * get() const { return handle_; }
 

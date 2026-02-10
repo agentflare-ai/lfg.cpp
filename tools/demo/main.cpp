@@ -93,6 +93,56 @@ struct ConfidenceLogEntry {
     int         turn_index;          // Which chat turn (1-based)
 };
 
+struct ToolRankingEntry {
+    std::string query;          // User message used as ranking query
+    std::string ranked_output;  // Full formatted output from rank_tools
+    int turn_index;
+};
+
+// ---------------------------------------------------------------------------
+// Example tools for tool ranking visualization
+// ---------------------------------------------------------------------------
+
+static const lfg_tool_desc EXAMPLE_TOOLS[] = {
+    {"get_weather",
+     "Get the current weather forecast for a given location",
+     R"({"type":"object","properties":{"location":{"type":"string","description":"City or coordinates"},"units":{"type":"string","enum":["celsius","fahrenheit"]}},"required":["location"]})"},
+    {"search_web",
+     "Search the internet for information on a topic",
+     R"({"type":"object","properties":{"query":{"type":"string","description":"Search query"},"num_results":{"type":"integer","description":"Number of results to return"}},"required":["query"]})"},
+    {"send_email",
+     "Send an email message to a recipient",
+     R"({"type":"object","properties":{"to":{"type":"string","description":"Recipient email address"},"subject":{"type":"string"},"body":{"type":"string"}},"required":["to","subject","body"]})"},
+    {"calculator",
+     "Evaluate an arithmetic or mathematical expression",
+     R"({"type":"object","properties":{"expression":{"type":"string","description":"Math expression to evaluate"}},"required":["expression"]})"},
+    {"set_reminder",
+     "Set a timed reminder with a message",
+     R"json({"type":"object","properties":{"message":{"type":"string"},"time":{"type":"string","description":"When to remind (ISO 8601 or natural language)"}},"required":["message","time"]})json"},
+    {"create_calendar_event",
+     "Create a calendar event with a title, time, and optional attendees",
+     R"({"type":"object","properties":{"title":{"type":"string"},"start_time":{"type":"string"},"end_time":{"type":"string"},"attendees":{"type":"array","items":{"type":"string"}}},"required":["title","start_time"]})"},
+    {"translate_text",
+     "Translate text from one language to another",
+     R"({"type":"object","properties":{"text":{"type":"string"},"source_language":{"type":"string"},"target_language":{"type":"string"}},"required":["text","target_language"]})"},
+    {"get_stock_price",
+     "Look up the current stock price for a ticker symbol",
+     R"({"type":"object","properties":{"symbol":{"type":"string","description":"Stock ticker symbol"}},"required":["symbol"]})"},
+    {"play_music",
+     "Play a song or playlist by name or artist",
+     R"({"type":"object","properties":{"query":{"type":"string","description":"Song, artist, or playlist name"},"shuffle":{"type":"boolean"}},"required":["query"]})"},
+    {"set_timer",
+     "Set a countdown timer for a specified duration",
+     R"({"type":"object","properties":{"duration_seconds":{"type":"integer","description":"Timer duration in seconds"},"label":{"type":"string"}},"required":["duration_seconds"]})"},
+    {"take_screenshot",
+     "Capture a screenshot of the current screen",
+     R"({"type":"object","properties":{"region":{"type":"string","description":"Full screen or window name","default":"full"}}})"},
+    {"read_file",
+     "Read the contents of a file from the filesystem",
+     R"({"type":"object","properties":{"path":{"type":"string","description":"File path to read"},"encoding":{"type":"string","default":"utf-8"}},"required":["path"]})"},
+};
+static constexpr int N_EXAMPLE_TOOLS = sizeof(EXAMPLE_TOOLS) / sizeof(EXAMPLE_TOOLS[0]);
+
 struct AppState {
     std::mutex mtx;
 
@@ -143,6 +193,21 @@ struct AppState {
     // Confidence log (sustained low-entropy spans — store candidates)
     std::vector<ConfidenceLogEntry> confidence_log;
 
+    // Context log (exact formatted prompts + raw output per turn)
+    struct ContextLogEntry {
+        std::string input;   // Formatted prompt sent to tokenizer
+        std::string output;  // Raw unparsed model output
+    };
+    std::vector<ContextLogEntry> context_log;
+
+    // Generated token IDs (for raw output with special tokens)
+    std::vector<lfg_token> generated_tokens;
+
+    // Tool ranking
+    bool tools_enabled = true;
+    int32_t tool_top_k = 3;
+    std::vector<ToolRankingEntry> tool_ranking_log;
+
     // Log
     std::string log_buffer;
 };
@@ -154,7 +219,7 @@ static AppState g_state;
 // ---------------------------------------------------------------------------
 
 static lfg_generate_action token_callback(
-    lfg_token /*token*/, const char *piece, int32_t piece_len, void *user_data)
+    lfg_token token, const char *piece, int32_t piece_len, void *user_data)
 {
     auto *state = static_cast<AppState *>(user_data);
     std::lock_guard<std::mutex> lock(state->mtx);
@@ -162,6 +227,7 @@ static lfg_generate_action token_callback(
         return LFG_GENERATE_STOP;
     }
     state->pending_output.append(piece, static_cast<size_t>(piece_len));
+    state->generated_tokens.push_back(token);
     return LFG_GENERATE_CONTINUE;
 }
 
@@ -203,7 +269,12 @@ static const char *entropy_callback(
     std::lock_guard<std::mutex> lock(state->mtx);
 
     RetrievalLogEntry entry;
-    entry.context_text = state->pending_output; // text generated so far
+    // Full text = already-drained portion + pending (we hold the lock)
+    if (!state->messages.empty() && state->messages.back().role == "assistant") {
+        entry.context_text = state->messages.back().text + state->pending_output;
+    } else {
+        entry.context_text = state->pending_output;
+    }
     entry.entropy = event->entropy;
     entry.normalized = event->normalized;
     entry.top_logprob = event->top_logprob;
@@ -231,7 +302,12 @@ static void confidence_callback(
     std::lock_guard<std::mutex> lock(state->mtx);
 
     ConfidenceLogEntry entry;
-    entry.context_text = state->pending_output;
+    // Full text = already-drained portion + pending (we hold the lock)
+    if (!state->messages.empty() && state->messages.back().role == "assistant") {
+        entry.context_text = state->messages.back().text + state->pending_output;
+    } else {
+        entry.context_text = state->pending_output;
+    }
     entry.mean_entropy = event->mean_entropy;
     entry.min_entropy = event->min_entropy;
     entry.span_length = event->span_length;
@@ -245,6 +321,94 @@ static void confidence_callback(
     entry.turn_index = turn;
 
     state->confidence_log.push_back(std::move(entry));
+}
+
+// ---------------------------------------------------------------------------
+// Simple tool executor for demo (handles calculator, stubs for others)
+// ---------------------------------------------------------------------------
+
+// Tiny expression evaluator: handles +, -, *, / with parentheses, integer/float operands.
+static double eval_expr(const char *&s);
+
+static double eval_atom(const char *&s) {
+    while (*s == ' ') s++;
+    bool neg = false;
+    if (*s == '-') { neg = true; s++; }
+    double val;
+    if (*s == '(') {
+        s++; // skip '('
+        val = eval_expr(s);
+        if (*s == ')') s++;
+    } else {
+        char *end;
+        val = std::strtod(s, &end);
+        s = end;
+    }
+    return neg ? -val : val;
+}
+
+static double eval_term(const char *&s) {
+    double val = eval_atom(s);
+    while (*s == ' ') s++;
+    while (*s == '*' || *s == '/') {
+        char op = *s++;
+        double rhs = eval_atom(s);
+        if (op == '*') val *= rhs; else if (rhs != 0) val /= rhs;
+        while (*s == ' ') s++;
+    }
+    return val;
+}
+
+static double eval_expr(const char *&s) {
+    double val = eval_term(s);
+    while (*s == ' ') s++;
+    while (*s == '+' || *s == '-') {
+        char op = *s++;
+        double rhs = eval_term(s);
+        if (op == '+') val += rhs; else val -= rhs;
+        while (*s == ' ') s++;
+    }
+    return val;
+}
+
+static std::string execute_tool(const char *name, const char *arguments) {
+    if (!name) return "{\"error\": \"no tool name\"}";
+
+    if (std::strcmp(name, "calculator") == 0) {
+        // Parse "expression" from JSON args: {"expression": "2 + 2"}
+        std::string args(arguments ? arguments : "{}");
+        // Simple extraction: find "expression" value
+        size_t key_pos = args.find("\"expression\"");
+        if (key_pos == std::string::npos) return "{\"error\": \"missing expression\"}";
+        size_t colon = args.find(':', key_pos);
+        if (colon == std::string::npos) return "{\"error\": \"malformed args\"}";
+        // Find the string value
+        size_t q1 = args.find('"', colon + 1);
+        size_t q2 = (q1 != std::string::npos) ? args.find('"', q1 + 1) : std::string::npos;
+        if (q1 == std::string::npos || q2 == std::string::npos)
+            return "{\"error\": \"missing expression value\"}";
+        std::string expr = args.substr(q1 + 1, q2 - q1 - 1);
+        const char *p = expr.c_str();
+        double result = eval_expr(p);
+        // Format result — use integer format if it's a whole number
+        char buf[64];
+        if (result == (double)(long long)result && std::fabs(result) < 1e15) {
+            std::snprintf(buf, sizeof(buf), "%lld", (long long)result);
+        } else {
+            std::snprintf(buf, sizeof(buf), "%.6g", result);
+        }
+        return std::string("{\"result\": ") + buf + "}";
+    }
+
+    if (std::strcmp(name, "get_weather") == 0) {
+        return R"({"temperature": 22, "condition": "sunny", "humidity": 45})";
+    }
+    if (std::strcmp(name, "search_web") == 0) {
+        return R"({"results": [{"title": "Example result", "snippet": "This is a demo search result."}]})";
+    }
+
+    // Generic stub for unimplemented tools
+    return std::string("{\"status\": \"ok\", \"note\": \"stub response for ") + name + "\"}";
 }
 
 // ---------------------------------------------------------------------------
@@ -288,7 +452,7 @@ static void inference_thread_func(AppState *state) {
         if (i == msgs_copy.size() - 1 && m.role == "assistant" && m.text.empty()) {
             continue;
         }
-        lfg_chat_message cm;
+        lfg_chat_message cm{};
         cm.role = m.role.c_str();
         cm.content = m.text.c_str();
         c_msgs.push_back(cm);
@@ -299,8 +463,167 @@ static void inference_thread_func(AppState *state) {
         c_msgs.data(), c_msgs.size(),
         gen_cfg);
 
+    // Tool call loop: execute tools and re-generate until model produces a
+    // non-tool-call response (max 5 rounds to prevent infinite loops).
+    // Intermediate messages (raw assistant output with tool markers, tool results)
+    // are kept ONLY in the c_msgs API array — state->messages stays clean for the UI.
+    std::string tool_call_info;
+    // Accumulate intermediate messages separately from UI-visible chat history.
+    // These hold the raw assistant output (with <|tool_call_start|> markers) and
+    // tool result messages that the model needs to see but the user shouldn't.
+    struct IntermediateMsg { std::string role; std::string text; };
+    std::vector<IntermediateMsg> intermediate_msgs;
+
+    for (int tool_round = 0;
+         tool_round < 5 && result.stop_reason == LFG_STOP_TOOL_CALL;
+         tool_round++)
+    {
+        int32_t n_calls = 0;
+        const lfg_tool_call *calls = lfg_session_get_tool_calls(state->session, &n_calls);
+
+        if (tool_round > 0) tool_call_info += "--- Round " + std::to_string(tool_round + 1) + " ---\n";
+
+        // Get the raw assistant output (with <|tool_call_start|>...<|tool_call_end|>
+        // markers) that the model needs in history per LFM2.5 protocol.
+        // This goes into intermediate_msgs, NOT state->messages.
+        {
+            int32_t raw_len = 0;
+            const char *raw_ptr = lfg_session_get_last_output(state->session, &raw_len);
+            std::string raw_assistant;
+            if (raw_ptr && raw_len > 0) {
+                raw_assistant.assign(raw_ptr, static_cast<size_t>(raw_len));
+            }
+            intermediate_msgs.push_back({"assistant", std::move(raw_assistant)});
+        }
+
+        // Execute each tool call, log it, and add results to intermediate_msgs
+        for (int32_t tc = 0; tc < n_calls; ++tc) {
+            std::string name = calls[tc].name ? calls[tc].name : "?";
+            std::string args = calls[tc].arguments ? calls[tc].arguments : "{}";
+            std::string id   = calls[tc].id ? calls[tc].id : "?";
+
+            std::string tool_result = execute_tool(calls[tc].name, calls[tc].arguments);
+
+            tool_call_info += name + "(" + args + ")\n";
+            tool_call_info += "  id: " + id + "\n";
+            tool_call_info += "  result: " + tool_result + "\n\n";
+
+            intermediate_msgs.push_back({"tool", std::move(tool_result)});
+        }
+
+        // Clear pending output for the continuation — the existing empty assistant
+        // message in state->messages will receive the next generation's tokens
+        {
+            std::lock_guard<std::mutex> lock(state->mtx);
+            state->pending_output.clear();
+        }
+
+        // Build c_msgs: original messages (minus trailing empty assistant) +
+        // intermediate messages (raw assistant + tool results)
+        std::vector<ChatMessage> base_msgs_copy;
+        {
+            std::lock_guard<std::mutex> lock(state->mtx);
+            base_msgs_copy = state->messages;
+        }
+        c_msgs.clear();
+        for (size_t i = 0; i < base_msgs_copy.size(); ++i) {
+            auto &m = base_msgs_copy[i];
+            // Skip trailing empty assistant placeholder
+            if (i == base_msgs_copy.size() - 1 && m.role == "assistant" && m.text.empty()) {
+                continue;
+            }
+            lfg_chat_message cm{};
+            cm.role = m.role.c_str();
+            cm.content = m.text.c_str();
+            c_msgs.push_back(cm);
+        }
+        // Append intermediate messages (raw assistant outputs + tool results)
+        for (auto &im : intermediate_msgs) {
+            lfg_chat_message cm{};
+            cm.role = im.role.c_str();
+            cm.content = im.text.c_str();
+            c_msgs.push_back(cm);
+        }
+
+        // Reset session so chat_generate re-ingests the full conversation
+        lfg_session_reset(state->session);
+
+        // Re-generate with the tool results in context
+        result = lfg_session_chat_generate(
+            state->session,
+            c_msgs.data(), c_msgs.size(),
+            gen_cfg);
+    }
+
+    // Capture the formatted prompt for the Context tab
+    int32_t prompt_len = 0;
+    const char *prompt_text = lfg_session_get_last_prompt(state->session, &prompt_len);
+
+    // Capture tool ranking if tools are enabled
+    std::string rank_output;
+    std::string rank_query;
+    bool do_rank = false;
     {
         std::lock_guard<std::mutex> lock(state->mtx);
+        do_rank = state->tools_enabled;
+        // Find the last user message as ranking query
+        for (int i = (int)state->messages.size() - 1; i >= 0; i--) {
+            if (state->messages[i].role == "user") {
+                rank_query = state->messages[i].text;
+                break;
+            }
+        }
+    }
+    if (do_rank && !rank_query.empty()) {
+        // First call to get required size
+        int32_t needed = lfg_session_rank_tools(state->session,
+            rank_query.c_str(), (int32_t)rank_query.size(), nullptr, 0);
+        if (needed > 0) {
+            rank_output.resize(needed);
+            lfg_session_rank_tools(state->session,
+                rank_query.c_str(), (int32_t)rank_query.size(),
+                &rank_output[0], needed + 1);
+        }
+    }
+
+    // Get raw output from session (already accumulated with special tokens)
+    std::string raw_output;
+    {
+        int32_t out_len = 0;
+        const char *out_ptr = lfg_session_get_last_output(state->session, &out_len);
+        if (out_ptr && out_len > 0) {
+            raw_output.assign(out_ptr, static_cast<size_t>(out_len));
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(state->mtx);
+        // Capture context input + raw output (with special tokens visible)
+        {
+            AppState::ContextLogEntry ctx_entry;
+            if (prompt_text && prompt_len > 0) {
+                ctx_entry.input.assign(prompt_text, static_cast<size_t>(prompt_len));
+            }
+            ctx_entry.output = raw_output;
+            if (!ctx_entry.input.empty() || !ctx_entry.output.empty()) {
+                state->context_log.push_back(std::move(ctx_entry));
+            }
+        }
+        // Store tool ranking entry (includes structured calls if present)
+        if (!rank_output.empty() || !tool_call_info.empty()) {
+            int turn = 0;
+            for (auto &m : state->messages) {
+                if (m.role == "user") turn++;
+            }
+            std::string combined = rank_output;
+            if (!tool_call_info.empty()) {
+                if (!combined.empty()) combined += "\n\n--- Parsed Tool Calls ---\n";
+                combined += tool_call_info;
+            }
+            if (!rank_query.empty() || !combined.empty()) {
+                state->tool_ranking_log.push_back({rank_query, combined, turn});
+            }
+        }
         state->last_result = result;
         state->gen_elapsed = glfwGetTime() - state->gen_start_time;
         state->last_entropy = lfg_session_get_last_entropy(state->session);
@@ -334,6 +657,17 @@ static void recreate_session(AppState *state) {
     }
     if (state->surprise_enabled) {
         lfg_session_configure_surprise_monitor(state->session, &state->surprise_cfg);
+    }
+
+    // Register tools
+    if (state->tools_enabled) {
+        int32_t n = lfg_session_register_tools(state->session, EXAMPLE_TOOLS, N_EXAMPLE_TOOLS, state->tool_top_k);
+        if (n > 0) {
+            state->log_buffer += "Registered " + std::to_string(n) + " tools (top_k=" +
+                                 std::to_string(state->tool_top_k) + ")\n";
+        } else {
+            state->log_buffer += "WARNING: Failed to register tools\n";
+        }
     }
 
     state->needs_session_recreate = false;
@@ -423,7 +757,7 @@ static void selectable_text(const char *label, const std::string &text, const Im
 // UI Panels
 // ---------------------------------------------------------------------------
 
-static char model_path_buf[1024] = "models/lfm2-350M.gguf";
+static char model_path_buf[1024] = "models/LFM2.5-1.2B-Thinking-GGUF/LFM2.5-1.2B-Thinking-Q4_K_M.gguf";
 
 static void draw_model_panel(AppState *state) {
     ImGui::Text("Model");
@@ -562,6 +896,20 @@ static void draw_settings_panel(AppState *state) {
             if (state->surprise_enabled) {
                 lfg_session_configure_surprise_monitor(state->session, &state->surprise_cfg);
             }
+        }
+    }
+
+    if (ImGui::CollapsingHeader("Tools")) {
+        if (ImGui::Checkbox("Enable Tools", &state->tools_enabled)) {
+            changed = true;
+        }
+        if (state->tools_enabled) {
+            ImGui::Indent();
+            if (ImGui::SliderInt("Top K", &state->tool_top_k, 1, 12)) {
+                changed = true;
+            }
+            ImGui::TextDisabled("%d tools registered", N_EXAMPLE_TOOLS);
+            ImGui::Unindent();
         }
     }
 
@@ -706,6 +1054,7 @@ static void draw_chat_panel(AppState *state) {
                 state->generating = true;
                 state->stop_requested = false;
                 state->pending_output.clear();
+                state->generated_tokens.clear();
                 state->gen_start_time = glfwGetTime();
                 state->last_result = {};
             }
@@ -739,6 +1088,7 @@ static void draw_status_bar(AppState *state) {
             case LFG_STOP_EOS:        stop_str = "EOS"; break;
             case LFG_STOP_MAX_TOKENS: stop_str = "max_tokens"; break;
             case LFG_STOP_CALLBACK:   stop_str = "stopped"; break;
+            case LFG_STOP_TOOL_CALL:  stop_str = "tool_call"; break;
         }
 
         ImGui::Text("Tokens: %d | %.1f tok/s | Stop: %s",
@@ -969,6 +1319,121 @@ static void draw_confidence_panel(AppState *state) {
     ImGui::EndChild();
 }
 
+static void draw_tools_panel(AppState *state) {
+    if (state->tool_ranking_log.empty()) {
+        ImGui::TextDisabled("No tool ranking results yet. Enable tools in Settings and send a message.");
+        return;
+    }
+
+    ImGui::Text("Rankings: %d", (int)state->tool_ranking_log.size());
+    ImGui::SameLine();
+    if (ImGui::Button("Clear##tools")) {
+        state->tool_ranking_log.clear();
+        return;
+    }
+    ImGui::Separator();
+
+    ImGui::BeginChild("ToolsList", ImVec2(0, 0), ImGuiChildFlags_Borders);
+
+    for (int idx = (int)state->tool_ranking_log.size() - 1; idx >= 0; idx--) {
+        auto &e = state->tool_ranking_log[idx];
+        ImGui::PushID(idx + 40000);
+
+        char header[128];
+        snprintf(header, sizeof(header), "Turn %d  \"%.*s\"",
+                 e.turn_index,
+                 (int)std::min(e.query.size(), (size_t)50),
+                 e.query.c_str());
+
+        bool open = ImGui::CollapsingHeader(header, ImGuiTreeNodeFlags_DefaultOpen);
+
+        if (open) {
+            ImGui::Indent();
+
+            ImGui::TextDisabled("Query:");
+            ImVec4 query_color(0.4f, 0.7f, 1.0f, 1.0f);
+            char qid[32];
+            snprintf(qid, sizeof(qid), "##tquery%d", idx);
+            selectable_text(qid, e.query, &query_color);
+
+            ImGui::Spacing();
+            ImGui::TextDisabled("Ranked Tools:");
+            ImVec4 rank_color(0.9f, 0.85f, 0.5f, 1.0f);
+            char rid[32];
+            snprintf(rid, sizeof(rid), "##tranked%d", idx);
+            selectable_text(rid, e.ranked_output, &rank_color);
+
+            ImGui::Unindent();
+        }
+
+        ImGui::PopID();
+        ImGui::Spacing();
+    }
+
+    ImGui::EndChild();
+}
+
+static void draw_context_panel(AppState *state) {
+    if (state->context_log.empty()) {
+        ImGui::TextDisabled("No context entries yet. Send a message to see the formatted prompt and raw output.");
+        return;
+    }
+
+    ImGui::Text("Entries: %d", (int)state->context_log.size());
+    ImGui::SameLine();
+    if (ImGui::Button("Clear##context")) {
+        state->context_log.clear();
+        return;
+    }
+    ImGui::Separator();
+
+    // Scrollable list (newest first)
+    ImGui::BeginChild("ContextList", ImVec2(0, 0), ImGuiChildFlags_Borders);
+
+    for (int idx = (int)state->context_log.size() - 1; idx >= 0; idx--) {
+        auto &entry = state->context_log[idx];
+        ImGui::PushID(idx + 30000);
+
+        char header[64];
+        snprintf(header, sizeof(header), "Turn %d", idx + 1);
+
+        if (ImGui::CollapsingHeader(header)) {
+            ImGui::Indent();
+
+            // Context Input (formatted prompt)
+            if (!entry.input.empty()) {
+                ImGui::TextDisabled("Context Input (%d chars):", (int)entry.input.size());
+                ImVec4 input_color(0.8f, 0.8f, 0.6f, 1.0f);
+                char in_id[32];
+                snprintf(in_id, sizeof(in_id), "##ctxin%d", idx);
+                selectable_text(in_id, entry.input, &input_color);
+            } else {
+                ImGui::TextDisabled("(no context input captured)");
+            }
+
+            ImGui::Spacing();
+
+            // Raw Output (unparsed model output)
+            if (!entry.output.empty()) {
+                ImGui::TextDisabled("Raw Output (%d chars):", (int)entry.output.size());
+                ImVec4 output_color(0.5f, 1.0f, 0.5f, 1.0f);
+                char out_id[32];
+                snprintf(out_id, sizeof(out_id), "##ctxout%d", idx);
+                selectable_text(out_id, entry.output, &output_color);
+            } else {
+                ImGui::TextDisabled("(no output captured)");
+            }
+
+            ImGui::Unindent();
+        }
+
+        ImGui::PopID();
+        ImGui::Spacing();
+    }
+
+    ImGui::EndChild();
+}
+
 static void draw_log_panel(AppState *state) {
     if (ImGui::CollapsingHeader("Log")) {
         ImGui::BeginChild("LogScroll", ImVec2(0, 120), ImGuiChildFlags_Borders);
@@ -1082,7 +1547,7 @@ int main(int /*argc*/, char ** /*argv*/) {
 
         // Main area with tabs
         ImGui::BeginChild("MainArea", ImVec2(0, 0));
-        if (ImGui::BeginTabBar("MainTabs")) {
+        if (ImGui::BeginTabBar("MainTabs", ImGuiTabBarFlags_FittingPolicyScroll)) {
             if (ImGui::BeginTabItem("Chat")) {
                 draw_chat_panel(&g_state);
                 draw_status_bar(&g_state);
@@ -1122,6 +1587,30 @@ int main(int /*argc*/, char ** /*argv*/) {
             }
             if (ImGui::BeginTabItem(confidence_label)) {
                 draw_confidence_panel(&g_state);
+                ImGui::EndTabItem();
+            }
+            // Show context count badge in tab label
+            char context_label[64];
+            if (g_state.context_log.empty()) {
+                snprintf(context_label, sizeof(context_label), "Context");
+            } else {
+                snprintf(context_label, sizeof(context_label), "Context (%d)",
+                         (int)g_state.context_log.size());
+            }
+            if (ImGui::BeginTabItem(context_label)) {
+                draw_context_panel(&g_state);
+                ImGui::EndTabItem();
+            }
+            // Show tools count badge in tab label
+            char tools_label[64];
+            if (g_state.tool_ranking_log.empty()) {
+                snprintf(tools_label, sizeof(tools_label), "Tools");
+            } else {
+                snprintf(tools_label, sizeof(tools_label), "Tools (%d)",
+                         (int)g_state.tool_ranking_log.size());
+            }
+            if (ImGui::BeginTabItem(tools_label)) {
+                draw_tools_panel(&g_state);
                 ImGui::EndTabItem();
             }
             ImGui::EndTabBar();
