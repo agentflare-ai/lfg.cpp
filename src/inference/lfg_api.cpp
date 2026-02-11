@@ -178,7 +178,8 @@ struct lfg_session {
         void        *fn_user_data;
     };
 
-    lfg_context     *tool_ctx;         // Separate context for computing tool embeddings
+    lfg_context     *tool_ctx;         // Separate context for computing tool embeddings (POOLING_TYPE_MEAN)
+    lfg_context     *embed_none_ctx;   // Lazily created with POOLING_TYPE_NONE for per-token embeddings
     lfg_tool_entry  *tool_entries;     // malloc'd array, size = tool_count
     int32_t          tool_count;
     int32_t          tool_n_embd;      // cached n_embd for dot products
@@ -404,12 +405,25 @@ static bool session_ensure_embed_ctx(lfg_session *s) {
     return s->tool_ctx != nullptr;
 }
 
+// Ensure session has an embed_none_ctx for per-token embeddings. Returns false on failure.
+static bool session_ensure_embed_none_ctx(lfg_session *s) {
+    if (s->embed_none_ctx) return true;
+    lfg_context_params tparams = lfg_context_default_params();
+    tparams.n_ctx = 512;
+    tparams.n_batch = 512;
+    tparams.n_threads = s->config.n_threads;
+    tparams.embeddings = true;
+    tparams.pooling_type = LFG_POOLING_TYPE_NONE;
+    s->embed_none_ctx = lfg_init_from_model(s->model, tparams);
+    return s->embed_none_ctx != nullptr;
+}
+
 // Compute mean-pooled embedding of the current prompt into out_embd.
 // Returns true on success. Zero-alloc (uses existing tool_ctx).
 static bool compute_query_embedding(lfg_session *s, float *out_embd) {
     if (!s->tool_ctx || s->token_history.size == 0) return false;
 
-    int32_t n_embd = lfg_model_n_embd(s->model);
+    int32_t n_embd = lfg_model_n_embd_out(s->model);
     lfg_memory_clear(lfg_get_memory(s->tool_ctx), true);
 
     lfg_token *prompt_tokens = s->token_history.data;
@@ -953,6 +967,7 @@ LFG_API lfg_session * lfg_session_create(lfg_model * model, const lfg_session_co
 
     // Tool ranking (all nullptr/zero — allocated in register_tools)
     s->tool_ctx = nullptr;
+    s->embed_none_ctx = nullptr;
     s->tool_entries = nullptr;
     s->tool_count = 0;
     s->tool_n_embd = 0;
@@ -1063,6 +1078,7 @@ LFG_API void lfg_session_free(lfg_session * session) {
     if (!session) return;
     if (session->sampler) lfg_sampler_free(session->sampler);
     lfg_session_clear_tools(session);
+    if (session->embed_none_ctx) lfg_free(session->embed_none_ctx);
     if (session->ctx) lfg_free(session->ctx);
     if (session->healing_sampler_snapshot) lfg_sampler_free(session->healing_sampler_snapshot);
 
@@ -2082,7 +2098,7 @@ LFG_API int32_t lfg_session_register_tools(lfg_session * session,
         }
 
         const lfg_vocab *vocab = lfg_model_get_vocab(session->model);
-        int32_t n_embd = lfg_model_n_embd(session->model);
+        int32_t n_embd = lfg_model_n_embd_out(session->model);
 
         // Free previous entries (but keep cache)
         session_free_tool_entries(session);
@@ -2271,7 +2287,7 @@ LFG_API int32_t lfg_session_configure_entropy_monitor(
     }
 
     int32_t cap = config->ring_size > 0 ? config->ring_size : 4;
-    int32_t n_embd = lfg_model_n_embd(session->model);
+    int32_t n_embd = lfg_model_n_embd_out(session->model);
 
     // Free previous allocations
     free(session->entropy_slots);
@@ -2461,7 +2477,7 @@ LFG_API int32_t lfg_session_configure_confidence_monitor(
 
     int32_t cap = config->ring_size > 0 ? config->ring_size : 4;
     int32_t min_span = config->min_span > 0 ? config->min_span : 5;
-    int32_t n_embd = lfg_model_n_embd(session->model);
+    int32_t n_embd = lfg_model_n_embd_out(session->model);
 
     // Free previous allocations
     free(session->confidence_slots);
@@ -2608,7 +2624,7 @@ LFG_API int32_t lfg_session_configure_surprise_monitor(
         return 0;
     }
 
-    int32_t n_embd = lfg_model_n_embd(session->model);
+    int32_t n_embd = lfg_model_n_embd_out(session->model);
 
     // Free previous allocation
     free(session->surprise_embd);
@@ -2686,7 +2702,7 @@ LFG_API int32_t lfg_session_embed(lfg_session * session,
         return 0;
     }
 
-    int32_t n_embd = lfg_model_n_embd(session->model);
+    int32_t n_embd = lfg_model_n_embd_out(session->model);
     if (out_cap < n_embd) return 0;
 
     const lfg_vocab *vocab = lfg_model_get_vocab(session->model);
@@ -2725,6 +2741,63 @@ LFG_API int32_t lfg_session_embed(lfg_session * session,
 
     free(toks);
     return n_embd;
+}
+
+LFG_API int32_t lfg_session_embed_tokens(lfg_session * session,
+                                          const char * text, int32_t text_len,
+                                          float * out, int32_t out_cap) {
+    if (!session || !text || text_len <= 0 || !out || out_cap <= 0) return 0;
+
+    if (!session_ensure_embed_none_ctx(session)) {
+        lfg_set_last_error(LFG_ERROR_INTERNAL,
+            "%s: failed to create per-token embedding context", __func__);
+        return 0;
+    }
+
+    int32_t n_embd = lfg_model_n_embd_out(session->model);
+    const lfg_vocab *vocab = lfg_model_get_vocab(session->model);
+
+    // Tokenize
+    int32_t tok_cap = text_len + 16;
+    lfg_token *toks = (lfg_token *)malloc(tok_cap * sizeof(lfg_token));
+    int32_t n_tok = lfg_tokenize(vocab, text, text_len, toks, tok_cap, true, false);
+    if (n_tok < 0) {
+        tok_cap = -n_tok;
+        toks = (lfg_token *)realloc(toks, tok_cap * sizeof(lfg_token));
+        n_tok = lfg_tokenize(vocab, text, text_len, toks, tok_cap, true, false);
+    }
+    if (n_tok <= 0) { free(toks); return 0; }
+
+    // Truncate to context capacity
+    int32_t ctx_cap = (int32_t)lfg_n_ctx(session->embed_none_ctx);
+    lfg_token *tok_ptr = toks;
+    if (n_tok > ctx_cap) {
+        tok_ptr = toks + (n_tok - ctx_cap);
+        n_tok = ctx_cap;
+    }
+
+    // Check output capacity
+    if (out_cap < n_tok * n_embd) { free(toks); return 0; }
+
+    // Forward pass
+    lfg_memory_clear(lfg_get_memory(session->embed_none_ctx), true);
+    lfg_batch batch = lfg_batch_get_one(tok_ptr, n_tok);
+    if (lfg_decode(session->embed_none_ctx, batch) != 0) { free(toks); return 0; }
+
+    // Extract per-token embeddings, L2-normalized
+    for (int32_t i = 0; i < n_tok; i++) {
+        float *src = lfg_get_embeddings_ith(session->embed_none_ctx, i);
+        float *dst = out + i * n_embd;
+        if (src) {
+            std::memcpy(dst, src, n_embd * sizeof(float));
+            l2_normalize(dst, n_embd);
+        } else {
+            std::memset(dst, 0, n_embd * sizeof(float));
+        }
+    }
+
+    free(toks);
+    return n_tok;
 }
 
 // ---------------------------------------------------------------------------

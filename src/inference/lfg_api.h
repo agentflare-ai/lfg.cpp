@@ -328,6 +328,14 @@ LFG_API int32_t lfg_session_embed(lfg_session * session,
                                    const char * text, int32_t text_len,
                                    float * out, int32_t out_cap);
 
+// Compute per-token, L2-normalized embeddings for the given text.
+// Writes n_tok * n_embd floats into out (out_cap must be >= n_tok * n_embd).
+// Returns n_tok on success, 0 on failure. Use lfg_model_n_embd_out() to get n_embd.
+// Allocates a per-token embedding context on first call (reused across calls).
+LFG_API int32_t lfg_session_embed_tokens(lfg_session * session,
+                                          const char * text, int32_t text_len,
+                                          float * out, int32_t out_cap);
+
 // --- Generate Loop API ---
 
 // Token callback return value: continue or stop generation.
