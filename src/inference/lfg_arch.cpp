@@ -8,6 +8,13 @@
 static const std::map<lfg_arch_enum, const char *> LFG_ARCH_NAMES = {
     { LFG_ARCH_LFM2,             "lfm2"             },
     { LFG_ARCH_LFM2MOE,          "lfm2moe"          },
+    { LFG_ARCH_BERT,             "bert"             },
+    { LFG_ARCH_NOMIC_BERT,       "nomic-bert"       },
+    { LFG_ARCH_NOMIC_BERT_MOE,   "nomic-bert-moe"   },
+    { LFG_ARCH_JINA_BERT_V2,     "jina-bert-v2"     },
+    { LFG_ARCH_JINA_BERT_V3,     "jina-bert-v3"     },
+    { LFG_ARCH_NEO_BERT,         "neo-bert"         },
+    { LFG_ARCH_MODERN_BERT,      "modern-bert"      },
     { LFG_ARCH_UNKNOWN,          "(unknown)"        },
 };
 
@@ -433,6 +440,111 @@ static std::set<lfg_tensor_enum> lfg_get_tensor_names(lfg_arch_enum arch) {
                 LFG_TENSOR_FFN_DOWN_EXPS,
                 LFG_TENSOR_FFN_UP_EXPS,
                 LFG_TENSOR_FFN_EXP_PROBS_B,
+            };
+        case LFG_ARCH_BERT:
+            return {
+                LFG_TENSOR_TOKEN_EMBD,
+                LFG_TENSOR_TOKEN_EMBD_NORM,
+                LFG_TENSOR_TOKEN_TYPES,
+                LFG_TENSOR_POS_EMBD,
+                LFG_TENSOR_ATTN_OUT_NORM,
+                LFG_TENSOR_ATTN_QKV,
+                LFG_TENSOR_ATTN_Q,
+                LFG_TENSOR_ATTN_K,
+                LFG_TENSOR_ATTN_V,
+                LFG_TENSOR_ATTN_OUT,
+                LFG_TENSOR_LAYER_OUT_NORM,
+                LFG_TENSOR_FFN_DOWN,
+                LFG_TENSOR_FFN_UP,
+                LFG_TENSOR_CLS,
+                LFG_TENSOR_CLS_OUT,
+            };
+        case LFG_ARCH_NOMIC_BERT:
+            return {
+                LFG_TENSOR_TOKEN_EMBD,
+                LFG_TENSOR_TOKEN_EMBD_NORM,
+                LFG_TENSOR_TOKEN_TYPES,
+                LFG_TENSOR_ATTN_OUT_NORM,
+                LFG_TENSOR_ATTN_QKV,
+                LFG_TENSOR_ATTN_OUT,
+                LFG_TENSOR_LAYER_OUT_NORM,
+                LFG_TENSOR_FFN_GATE,
+                LFG_TENSOR_FFN_DOWN,
+                LFG_TENSOR_FFN_UP,
+            };
+        case LFG_ARCH_NOMIC_BERT_MOE:
+            return {
+                LFG_TENSOR_TOKEN_EMBD,
+                LFG_TENSOR_TOKEN_EMBD_NORM,
+                LFG_TENSOR_TOKEN_TYPES,
+                LFG_TENSOR_ATTN_OUT_NORM,
+                LFG_TENSOR_ATTN_QKV,
+                LFG_TENSOR_ATTN_OUT,
+                LFG_TENSOR_LAYER_OUT_NORM,
+                LFG_TENSOR_FFN_GATE,
+                LFG_TENSOR_FFN_DOWN,
+                LFG_TENSOR_FFN_UP,
+                LFG_TENSOR_FFN_GATE_INP,
+                LFG_TENSOR_FFN_DOWN_EXPS,
+                LFG_TENSOR_FFN_UP_EXPS,
+            };
+        case LFG_ARCH_JINA_BERT_V3:
+            return {
+                LFG_TENSOR_TOKEN_EMBD,
+                LFG_TENSOR_TOKEN_EMBD_NORM,
+                LFG_TENSOR_TOKEN_TYPES,
+                LFG_TENSOR_ATTN_OUT_NORM,
+                LFG_TENSOR_ATTN_QKV,
+                LFG_TENSOR_ATTN_OUT,
+                LFG_TENSOR_FFN_DOWN,
+                LFG_TENSOR_FFN_UP,
+                LFG_TENSOR_LAYER_OUT_NORM,
+            };
+        case LFG_ARCH_JINA_BERT_V2:
+            return {
+                LFG_TENSOR_TOKEN_EMBD,
+                LFG_TENSOR_TOKEN_EMBD_NORM,
+                LFG_TENSOR_TOKEN_TYPES,
+                LFG_TENSOR_ATTN_NORM_2,
+                LFG_TENSOR_ATTN_OUT_NORM,
+                LFG_TENSOR_ATTN_Q,
+                LFG_TENSOR_ATTN_Q_NORM,
+                LFG_TENSOR_ATTN_K,
+                LFG_TENSOR_ATTN_K_NORM,
+                LFG_TENSOR_ATTN_V,
+                LFG_TENSOR_ATTN_OUT,
+                LFG_TENSOR_LAYER_OUT_NORM,
+                LFG_TENSOR_FFN_DOWN,
+                LFG_TENSOR_FFN_GATE,
+                LFG_TENSOR_FFN_UP,
+                LFG_TENSOR_CLS,
+            };
+        case LFG_ARCH_NEO_BERT:
+            return {
+                LFG_TENSOR_TOKEN_EMBD,
+                LFG_TENSOR_ATTN_NORM,
+                LFG_TENSOR_ATTN_QKV,
+                LFG_TENSOR_ATTN_OUT,
+                LFG_TENSOR_FFN_NORM,
+                LFG_TENSOR_FFN_DOWN,
+                LFG_TENSOR_FFN_UP,
+                LFG_TENSOR_ENC_OUTPUT_NORM,
+                LFG_TENSOR_CLS,
+                LFG_TENSOR_CLS_OUT,
+            };
+        case LFG_ARCH_MODERN_BERT:
+            return {
+                LFG_TENSOR_TOKEN_EMBD,
+                LFG_TENSOR_TOKEN_EMBD_NORM,
+                LFG_TENSOR_OUTPUT_NORM,
+                LFG_TENSOR_ATTN_NORM,
+                LFG_TENSOR_ATTN_OUT,
+                LFG_TENSOR_ATTN_QKV,
+                LFG_TENSOR_FFN_DOWN,
+                LFG_TENSOR_FFN_UP,
+                LFG_TENSOR_FFN_NORM,
+                LFG_TENSOR_CLS,
+                LFG_TENSOR_CLS_OUT,
             };
         case LFG_ARCH_UNKNOWN:
             return {

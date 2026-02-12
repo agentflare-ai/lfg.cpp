@@ -773,6 +773,15 @@ fn addExecutables(
     addCommonExeLinks(eval_tool_sim, target, framework_path, private_framework_path, sysroot);
     b.installArtifact(eval_tool_sim);
 
+    const eval_bert_parity = addExe(b, target, optimize, "eval-bert-parity", &[_][]const u8{"src/eval/eval_bert_parity.cpp"}, spdlog_include, cxx_flags, framework_path, private_framework_path);
+    eval_bert_parity.addIncludePath(b.path("third_party/llama.cpp/include"));
+    eval_bert_parity.addIncludePath(b.path("src/ggml"));
+    eval_bert_parity.linkLibrary(lfg_core);
+    eval_bert_parity.linkLibrary(llama_core);
+    eval_bert_parity.linkLibrary(ggml);
+    addCommonExeLinks(eval_bert_parity, target, framework_path, private_framework_path, sysroot);
+    b.installArtifact(eval_bert_parity);
+
     const llama_struct = addExe(b, target, optimize, "llama-structured-compare", &[_][]const u8{
         "src/eval/llama_structured_compare.cpp",
         "src/inference/json_schema_to_grammar.cpp",
@@ -1047,6 +1056,7 @@ fn addTests(
         "test_tool_chat_integration",
         "test_chat_first_message",
         "test_tool_call_parser",
+        "test_bert_embedding",
     };
 
     const test_files = [_][]const u8{
@@ -1088,6 +1098,7 @@ fn addTests(
         "src/tests/test_tool_chat_integration.cpp",
         "src/tests/test_chat_first_message.cpp",
         "src/tests/test_tool_call_parser.cpp",
+        "src/tests/test_bert_embedding.cpp",
     };
 
     var test_step = b.step("test", "Build and run tests");

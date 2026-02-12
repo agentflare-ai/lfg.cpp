@@ -16,6 +16,9 @@
 #endif
 
 #include "models/lfg_lfm2.h"
+#include "models/lfg_bert.h"
+#include "models/lfg_neo_bert.h"
+#include "models/lfg_modern_bert.h"
 
 #include <algorithm>
 #include <cassert>
@@ -690,6 +693,107 @@ void lfg_model::load_hparams(lfg_model_loader & ml) {
                     type = LFG_TYPE_UNKNOWN;
                 }
             } break;
+        case LFG_ARCH_BERT:
+            {
+                ml.get_key(LFG_KV_ATTENTION_LAYERNORM_EPS,    hparams.f_norm_eps);
+                ml.get_key(LFG_KV_ATTENTION_CAUSAL,           hparams.causal_attn);
+                ml.get_key(LFG_KV_POOLING_TYPE,               hparams.pooling_type, false);
+
+                switch (hparams.n_layer) {
+                    case 3:
+                        type = LFG_TYPE_17M; break; // bge-micro
+                    case 6:
+                        type = LFG_TYPE_22M; break; // MiniLM-L6
+                    case 12:
+                        switch (hparams.n_embd) {
+                            case 384: type = LFG_TYPE_33M; break; // MiniLM-L12, bge-small
+                            case 768: type = LFG_TYPE_109M; break; // bge-base
+                            default: type = LFG_TYPE_UNKNOWN;
+                        } break;
+                    case 24:
+                        type = LFG_TYPE_335M; break; // bge-large
+                    default: type = LFG_TYPE_UNKNOWN;
+                }
+            } break;
+        case LFG_ARCH_MODERN_BERT:
+            {
+                const bool found_swa = ml.get_key(LFG_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false);
+                if (found_swa && hparams.n_swa > 0) {
+                    uint32_t swa_period = 3;
+                    hparams.swa_type = LFG_SWA_TYPE_SYMMETRIC;
+
+                    ml.get_key(LFG_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa);
+                    ml.get_key_or_arr(LFG_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false);
+                    hparams.set_swa_pattern(swa_period);
+                } else {
+                    hparams.swa_type = LFG_SWA_TYPE_NONE;
+                }
+
+                ml.get_key(LFG_KV_ATTENTION_LAYERNORM_EPS, hparams.f_norm_eps);
+                ml.get_key(LFG_KV_ATTENTION_CAUSAL,        hparams.causal_attn);
+                ml.get_key(LFG_KV_POOLING_TYPE,            hparams.pooling_type, false);
+
+                switch (hparams.n_layer) {
+                    case 12:
+                        type = LFG_TYPE_47M; break; // granite-embedding-small
+                    case 22:
+                        type = LFG_TYPE_149M; break; // modern-bert-base
+                    case 28:
+                        type = LFG_TYPE_395M; break; // modern-bert-large
+                    default: type = LFG_TYPE_UNKNOWN;
+                }
+            } break;
+        case LFG_ARCH_JINA_BERT_V2:
+            {
+                ml.get_key(LFG_KV_ATTENTION_LAYERNORM_EPS,    hparams.f_norm_eps);
+                ml.get_key(LFG_KV_ATTENTION_CAUSAL,           hparams.causal_attn);
+                ml.get_key(LFG_KV_POOLING_TYPE,               hparams.pooling_type, false);
+                hparams.f_max_alibi_bias = 8.0f;
+
+                switch (hparams.n_layer) {
+                    case 4:  type = LFG_TYPE_33M;  break; // jina-embeddings-small
+                    case 12: type = LFG_TYPE_137M; break; // jina-embeddings-base
+                    default: type = LFG_TYPE_UNKNOWN;
+                }
+            } break;
+        case LFG_ARCH_JINA_BERT_V3:
+            {
+                ml.get_key(LFG_KV_ATTENTION_LAYERNORM_EPS,    hparams.f_norm_eps);
+                ml.get_key(LFG_KV_ATTENTION_CAUSAL,           hparams.causal_attn);
+                ml.get_key(LFG_KV_POOLING_TYPE,               hparams.pooling_type, false);
+
+                switch (hparams.n_layer) {
+                    case 24:
+                        type = LFG_TYPE_558M; break;
+                    default: type = LFG_TYPE_UNKNOWN;
+                }
+            } break;
+        case LFG_ARCH_NOMIC_BERT:
+        case LFG_ARCH_NOMIC_BERT_MOE:
+            {
+                ml.get_key(LFG_KV_ATTENTION_LAYERNORM_EPS,    hparams.f_norm_eps);
+                ml.get_key(LFG_KV_ATTENTION_CAUSAL,           hparams.causal_attn);
+                ml.get_key(LFG_KV_POOLING_TYPE,               hparams.pooling_type);
+                ml.get_key(LFG_KV_MOE_EVERY_N_LAYERS,         hparams.moe_every_n_layers, 0);
+
+                if (hparams.n_layer == 12 && hparams.n_embd == 768) {
+                    if (arch == LFG_ARCH_NOMIC_BERT) {
+                        type = LFG_TYPE_137M;
+                    } else if (arch == LFG_ARCH_NOMIC_BERT_MOE && hparams.moe_every_n_layers == 2) {
+                        type = LFG_TYPE_475M;
+                    }
+                }
+            } break;
+        case LFG_ARCH_NEO_BERT:
+            {
+                ml.get_key(LFG_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                ml.get_key(LFG_KV_ATTENTION_CAUSAL,            hparams.causal_attn);
+                ml.get_key(LFG_KV_POOLING_TYPE,                hparams.pooling_type);
+
+                if (hparams.n_layer == 28) {
+                    type = LFG_TYPE_250M;
+                }
+            } break;
         default: (void)0;
     }
     pimpl->n_bytes = ml.n_bytes;
@@ -847,13 +951,13 @@ bool lfg_model::load_tensors(lfg_model_loader & ml) {
         const int64_t n_embd_head_k = hparams.n_embd_head_k;
         // const int64_t n_embd_head_v = hparams.n_embd_head_v;
         const int64_t n_ff          = hparams.n_ff();
-        // const int64_t n_embd_gqa    = n_embd_v_gqa;
+        const int64_t n_embd_gqa    = n_embd_v_gqa;
         const int64_t n_vocab       = vocab.n_tokens();
-        // const int64_t n_token_types = vocab.n_token_types();
+        const int64_t n_token_types = vocab.n_token_types();
         // const int64_t n_rot         = hparams.n_rot;
         const int64_t n_expert      = hparams.n_expert;
         const int64_t n_expert_used = hparams.n_expert_used;
-        // const int64_t n_ctx_train   = hparams.n_ctx_train;
+        const int64_t n_ctx_train   = hparams.n_ctx_train;
 
         if (hparams.n_expert > 0 && hparams.n_expert_used == 0) {
             throw std::runtime_error("model has expert layers but no expert layers are used");
@@ -1065,6 +1169,179 @@ bool lfg_model::load_tensors(lfg_model_loader & ml) {
                     // for LFM2-ColBert-350M
                     dense_2_out_layers   = create_tensor(tn(LFG_TENSOR_DENSE_2_OUT, "weight"), {n_embd, hparams.get_n_embd_out()}, TENSOR_NOT_REQUIRED);
                     dense_2_out_layers_b = create_tensor(tn(LFG_TENSOR_DENSE_2_OUT, "bias"),   {hparams.get_n_embd_out()}, TENSOR_NOT_REQUIRED);
+                } break;
+            case LFG_ARCH_BERT:
+            case LFG_ARCH_NOMIC_BERT:
+            case LFG_ARCH_NOMIC_BERT_MOE:
+            case LFG_ARCH_JINA_BERT_V3:
+                {
+                    tok_embd     = create_tensor(tn(LFG_TENSOR_TOKEN_EMBD,  "weight"), {n_embd, n_vocab}, 0);
+                    type_embd    = create_tensor(tn(LFG_TENSOR_TOKEN_TYPES, "weight"), {n_embd, n_token_types}, TENSOR_NOT_REQUIRED);
+
+                    if (arch == LFG_ARCH_BERT) {
+                        pos_embd = create_tensor(tn(LFG_TENSOR_POS_EMBD,    "weight"), {n_embd, n_ctx_train}, 0);
+
+                        cls   = create_tensor(tn(LFG_TENSOR_CLS, "weight"), {n_embd, n_embd}, TENSOR_NOT_REQUIRED);
+                        cls_b = create_tensor(tn(LFG_TENSOR_CLS, "bias"),   {n_embd},         TENSOR_NOT_REQUIRED);
+
+                        cls_out   = create_tensor(tn(LFG_TENSOR_CLS_OUT, "weight"), {n_embd, hparams.n_cls_out}, TENSOR_NOT_REQUIRED);
+                        cls_out_b = create_tensor(tn(LFG_TENSOR_CLS_OUT, "bias"),   {hparams.n_cls_out},         TENSOR_NOT_REQUIRED);
+                    }
+
+                    tok_norm   = create_tensor(tn(LFG_TENSOR_TOKEN_EMBD_NORM, "weight"), {n_embd}, 0);
+                    tok_norm_b = create_tensor(tn(LFG_TENSOR_TOKEN_EMBD_NORM, "bias"),   {n_embd}, 0);
+
+                    for (uint32_t i = 0; i < n_layer; ++i) {
+                        auto & layer = layers[i];
+
+                        layer.wqkv = create_tensor(tn(LFG_TENSOR_ATTN_QKV, "weight", i), {n_embd, n_embd + 2*n_embd_gqa}, TENSOR_NOT_REQUIRED);
+                        layer.bqkv = create_tensor(tn(LFG_TENSOR_ATTN_QKV, "bias", i), {n_embd + 2*n_embd_gqa}, TENSOR_NOT_REQUIRED);
+
+                        if (!layer.wqkv) {
+                            layer.wq = create_tensor(tn(LFG_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd}, 0);
+                            layer.bq = create_tensor(tn(LFG_TENSOR_ATTN_Q,   "bias", i),   {n_embd}, 0);
+
+                            layer.wk = create_tensor(tn(LFG_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_gqa}, 0);
+                            layer.bk = create_tensor(tn(LFG_TENSOR_ATTN_K,   "bias", i),   {n_embd_gqa}, 0);
+
+                            layer.wv = create_tensor(tn(LFG_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa}, 0);
+                            layer.bv = create_tensor(tn(LFG_TENSOR_ATTN_V,   "bias", i),   {n_embd_gqa}, 0);
+                        }
+
+                        layer.wo = create_tensor(tn(LFG_TENSOR_ATTN_OUT,      "weight", i), {n_embd, n_embd}, 0);
+                        layer.bo = create_tensor(tn(LFG_TENSOR_ATTN_OUT,      "bias", i),   {n_embd}, TENSOR_NOT_REQUIRED);
+
+                        layer.attn_out_norm   = create_tensor(tn(LFG_TENSOR_ATTN_OUT_NORM, "weight", i), {n_embd}, 0);
+                        layer.attn_out_norm_b = create_tensor(tn(LFG_TENSOR_ATTN_OUT_NORM, "bias", i),   {n_embd}, 0);
+
+                        if (hparams.moe_every_n_layers > 0 && i % hparams.moe_every_n_layers == 1) {
+                            layer.ffn_up_exps   = create_tensor(tn(LFG_TENSOR_FFN_UP_EXPS,   "weight", i), {  n_embd, n_ff,   n_expert}, 0);
+                            layer.ffn_down_exps = create_tensor(tn(LFG_TENSOR_FFN_DOWN_EXPS, "weight", i), {  n_ff,   n_embd, n_expert}, 0);
+                            layer.ffn_gate_inp  = create_tensor(tn(LFG_TENSOR_FFN_GATE_INP,  "weight", i), {n_embd, n_expert}, 0);
+                        } else {
+                            layer.ffn_up     = create_tensor(tn(LFG_TENSOR_FFN_UP,   "weight", i), {n_embd, n_ff}, 0);
+                            layer.ffn_up_b   = create_tensor(tn(LFG_TENSOR_FFN_UP,   "bias", i),   {n_ff}, TENSOR_NOT_REQUIRED);
+                            layer.ffn_down   = create_tensor(tn(LFG_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd}, 0);
+                            layer.ffn_down_b = create_tensor(tn(LFG_TENSOR_FFN_DOWN, "bias", i),   {n_embd}, TENSOR_NOT_REQUIRED);
+
+                            if (arch == LFG_ARCH_NOMIC_BERT) {
+                                layer.ffn_gate = create_tensor(tn(LFG_TENSOR_FFN_GATE, "weight", i), {n_embd, n_ff}, 0);
+                            }
+                        }
+
+                        layer.layer_out_norm   = create_tensor(tn(LFG_TENSOR_LAYER_OUT_NORM, "weight", i), {n_embd}, 0);
+                        layer.layer_out_norm_b = create_tensor(tn(LFG_TENSOR_LAYER_OUT_NORM, "bias", i),   {n_embd}, 0);
+                    }
+                } break;
+            case LFG_ARCH_MODERN_BERT:
+                {
+                    tok_embd = create_tensor(tn(LFG_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
+                    tok_norm = create_tensor(tn(LFG_TENSOR_TOKEN_EMBD_NORM, "weight"), {n_embd}, 0);
+
+                    output_norm = create_tensor(tn(LFG_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
+
+                    for (uint32_t i = 0; i < n_layer; ++i) {
+                        auto & layer = layers[i];
+
+                        if (i != 0) {
+                            layer.attn_norm = create_tensor(tn(LFG_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
+                        } else {
+                            // layer 0 uses identity
+                            layer.attn_norm = create_tensor(tn(LFG_TENSOR_ATTN_NORM, "weight", i), {n_embd}, TENSOR_NOT_REQUIRED);
+                        }
+
+                        layer.wqkv = create_tensor(tn(LFG_TENSOR_ATTN_QKV, "weight", i), {n_embd, 3 * n_embd}, 0);
+                        layer.wo   = create_tensor(tn(LFG_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd}, 0);
+
+                        layer.ffn_up   = create_tensor(tn(LFG_TENSOR_FFN_UP,   "weight", i), {n_embd, 2 * n_ff}, 0);
+                        layer.ffn_down = create_tensor(tn(LFG_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd}, 0);
+                        layer.ffn_norm = create_tensor(tn(LFG_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
+                    }
+
+                    cls       = create_tensor(tn(LFG_TENSOR_CLS,     "weight"), {n_embd, n_embd}, TENSOR_NOT_REQUIRED);
+                    cls_out   = create_tensor(tn(LFG_TENSOR_CLS_OUT, "weight"), {n_embd, hparams.n_cls_out}, TENSOR_NOT_REQUIRED);
+                    cls_out_b = create_tensor(tn(LFG_TENSOR_CLS_OUT, "bias"),   {hparams.n_cls_out},         TENSOR_NOT_REQUIRED);
+                } break;
+            case LFG_ARCH_NEO_BERT:
+                {
+                    tok_embd = create_tensor(tn(LFG_TENSOR_TOKEN_EMBD,  "weight"), {n_embd, n_vocab}, 0);
+
+                    cls   = create_tensor(tn(LFG_TENSOR_CLS, "weight"), {n_embd, n_embd}, TENSOR_NOT_REQUIRED);
+                    cls_b = create_tensor(tn(LFG_TENSOR_CLS, "bias"),   {n_embd},         TENSOR_NOT_REQUIRED);
+
+                    cls_out   = create_tensor(tn(LFG_TENSOR_CLS_OUT, "weight"), {n_embd, hparams.n_cls_out}, TENSOR_NOT_REQUIRED);
+                    cls_out_b = create_tensor(tn(LFG_TENSOR_CLS_OUT, "bias"),   {hparams.n_cls_out},         TENSOR_NOT_REQUIRED);
+
+                    output_norm_enc = create_tensor(tn(LFG_TENSOR_ENC_OUTPUT_NORM, "weight"), {n_embd}, 0);
+
+                    for (uint32_t i = 0; i < n_layer; ++i) {
+                        auto & layer = layers[i];
+
+                        layer.attn_norm = create_tensor(tn(LFG_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
+
+                        layer.wqkv = create_tensor(tn(LFG_TENSOR_ATTN_QKV, "weight", i), {n_embd, n_embd + 2*n_embd_gqa}, 0);
+                        layer.wo   = create_tensor(tn(LFG_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd}, 0);
+
+                        layer.ffn_norm = create_tensor(tn(LFG_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
+
+                        layer.ffn_up   = create_tensor(tn(LFG_TENSOR_FFN_UP,   "weight", i), {n_embd, n_ff*2}, 0);
+                        layer.ffn_down = create_tensor(tn(LFG_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd}, 0);
+                    }
+                } break;
+            case LFG_ARCH_JINA_BERT_V2:
+                {
+                    tok_embd  = create_tensor(tn(LFG_TENSOR_TOKEN_EMBD,  "weight"), {n_embd, n_vocab}, 0);
+                    type_embd = create_tensor(tn(LFG_TENSOR_TOKEN_TYPES, "weight"), {n_embd, n_token_types}, 0);
+
+                    tok_norm   = create_tensor(tn(LFG_TENSOR_TOKEN_EMBD_NORM, "weight"), {n_embd}, 0);
+                    tok_norm_b = create_tensor(tn(LFG_TENSOR_TOKEN_EMBD_NORM, "bias"),   {n_embd}, 0);
+
+                    cls   = create_tensor(tn(LFG_TENSOR_CLS, "weight"), {n_embd, 1}, TENSOR_NOT_REQUIRED);
+                    cls_b = create_tensor(tn(LFG_TENSOR_CLS, "bias"),   {1},         TENSOR_NOT_REQUIRED);
+
+                    for (uint32_t i = 0; i < n_layer; ++i) {
+                        auto & layer = layers[i];
+
+                        layer.wq = create_tensor(tn(LFG_TENSOR_ATTN_Q, "weight", i), {n_embd, n_embd}, 0);
+                        layer.bq = create_tensor(tn(LFG_TENSOR_ATTN_Q, "bias", i),   {n_embd}, 0);
+
+                        layer.attn_q_norm   = create_tensor(tn(LFG_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd}, TENSOR_NOT_REQUIRED);
+                        layer.attn_q_norm_b = create_tensor(tn(LFG_TENSOR_ATTN_Q_NORM, "bias",   i), {n_embd}, TENSOR_NOT_REQUIRED);
+
+                        layer.wk = create_tensor(tn(LFG_TENSOR_ATTN_K, "weight", i), {n_embd, n_embd_gqa}, 0);
+                        layer.bk = create_tensor(tn(LFG_TENSOR_ATTN_K, "bias",   i), {n_embd_gqa}, 0);
+
+                        layer.attn_k_norm   = create_tensor(tn(LFG_TENSOR_ATTN_K_NORM, "weight", i), {n_embd}, TENSOR_NOT_REQUIRED);
+                        layer.attn_k_norm_b = create_tensor(tn(LFG_TENSOR_ATTN_K_NORM, "bias",   i), {n_embd}, TENSOR_NOT_REQUIRED);
+
+                        layer.wv = create_tensor(tn(LFG_TENSOR_ATTN_V, "weight", i), {n_embd, n_embd_gqa}, 0);
+                        layer.bv = create_tensor(tn(LFG_TENSOR_ATTN_V, "bias",   i), {n_embd_gqa}, 0);
+
+                        layer.wo = create_tensor(tn(LFG_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd}, 0);
+                        layer.bo = create_tensor(tn(LFG_TENSOR_ATTN_OUT, "bias",   i), {n_embd}, 0);
+
+                        layer.attn_out_norm   = create_tensor(tn(LFG_TENSOR_ATTN_OUT_NORM, "weight", i), {n_embd}, 0);
+                        layer.attn_out_norm_b = create_tensor(tn(LFG_TENSOR_ATTN_OUT_NORM, "bias",   i), {n_embd}, 0);
+
+                        layer.attn_norm_2   = create_tensor(tn(LFG_TENSOR_ATTN_NORM_2, "weight", i), {n_embd}, TENSOR_NOT_REQUIRED);
+                        layer.attn_norm_2_b = create_tensor(tn(LFG_TENSOR_ATTN_NORM_2, "bias",   i), {n_embd}, TENSOR_NOT_REQUIRED);
+
+                        layer.ffn_gate = create_tensor(tn(LFG_TENSOR_FFN_GATE, "weight", i), {n_embd, n_ff}, TENSOR_NOT_REQUIRED);
+
+                        const auto tn_ffn_up_weight = tn(LFG_TENSOR_FFN_UP, "weight", i);
+                        ggml_tensor * t_ffn_up = ml.get_tensor_meta(tn_ffn_up_weight.str().c_str());
+                        const int64_t n_ffn_up = t_ffn_up ? t_ffn_up->ne[1] : n_ff;
+
+                        GGML_ASSERT(n_ffn_up == n_ff || n_ffn_up == n_ff * 2);
+                        layer.ffn_up   = create_tensor(tn_ffn_up_weight, {n_embd, n_ffn_up}, 0);
+                        layer.ffn_up_b = create_tensor(tn(LFG_TENSOR_FFN_UP, "bias", i), {n_ffn_up}, TENSOR_NOT_REQUIRED);
+
+                        layer.ffn_down   = create_tensor(tn(LFG_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd}, 0);
+                        layer.ffn_down_b = create_tensor(tn(LFG_TENSOR_FFN_DOWN, "bias",   i), {n_embd}, 0);
+
+                        layer.layer_out_norm   = create_tensor(tn(LFG_TENSOR_LAYER_OUT_NORM, "weight", i), {n_embd}, 0);
+                        layer.layer_out_norm_b = create_tensor(tn(LFG_TENSOR_LAYER_OUT_NORM, "bias", i),   {n_embd}, 0);
+                    }
                 } break;
             default:
                 throw std::runtime_error("unknown architecture");
@@ -1565,6 +1842,14 @@ lfg_memory_i * lfg_model::create_memory(const lfg_memory_params & mem_params, co
     }
 
     switch (arch) {
+        case LFG_ARCH_BERT:
+        case LFG_ARCH_NOMIC_BERT:
+        case LFG_ARCH_NOMIC_BERT_MOE:
+        case LFG_ARCH_JINA_BERT_V2:
+        case LFG_ARCH_JINA_BERT_V3:
+        case LFG_ARCH_NEO_BERT:
+        case LFG_ARCH_MODERN_BERT:
+            { res = nullptr; } break;
         // Models that need specific instantiation should be handled in the
         // switch statement
         default:
@@ -1701,6 +1986,22 @@ ggml_cgraph * lfg_model::build_graph(const lfg_graph_params & graph_params) cons
                 } else {
                     llm = std::make_unique<lfg_build_lfm2<false>>(*this, graph_params);
                 }
+            } break;
+        case LFG_ARCH_BERT:
+        case LFG_ARCH_NOMIC_BERT:
+        case LFG_ARCH_NOMIC_BERT_MOE:
+        case LFG_ARCH_JINA_BERT_V2:
+        case LFG_ARCH_JINA_BERT_V3:
+            {
+                llm = std::make_unique<lfg_build_bert>(*this, graph_params);
+            } break;
+        case LFG_ARCH_NEO_BERT:
+            {
+                llm = std::make_unique<lfg_build_neo_bert>(*this, graph_params);
+            } break;
+        case LFG_ARCH_MODERN_BERT:
+            {
+                llm = std::make_unique<lfg_build_modern_bert>(*this, graph_params);
             } break;
         default:
             lfg_set_last_error(LFG_ERROR_UNSUPPORTED, "%s: unsupported architecture", __func__);
@@ -1889,6 +2190,20 @@ lfg_rope_type lfg_model_rope_type(const lfg_model * model) {
         case LFG_ARCH_LFM2:
         case LFG_ARCH_LFM2MOE:
              return LFG_ROPE_TYPE_NEOX;
+
+        // BERT: absolute position embeddings (no RoPE)
+        case LFG_ARCH_BERT:
+        case LFG_ARCH_JINA_BERT_V2:
+            return LFG_ROPE_TYPE_NONE;
+
+        // BERT variants with RoPE (NeoX-style)
+        case LFG_ARCH_NOMIC_BERT:
+        case LFG_ARCH_NOMIC_BERT_MOE:
+        case LFG_ARCH_JINA_BERT_V3:
+        case LFG_ARCH_NEO_BERT:
+        case LFG_ARCH_MODERN_BERT:
+            return LFG_ROPE_TYPE_NEOX;
+
         case LFG_ARCH_UNKNOWN:
             lfg_set_last_error(LFG_ERROR_UNSUPPORTED, "%s: unknown architecture", __func__);
             return LFG_ROPE_TYPE_NONE;
