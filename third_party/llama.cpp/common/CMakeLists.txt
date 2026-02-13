@@ -75,6 +75,7 @@ add_library(${TARGET} STATIC
     ngram-cache.h
     peg-parser.cpp
     peg-parser.h
+    peg-parser-gbnf.cpp
     preset.cpp
     preset.h
     regex-partial.cpp

@@ -105,7 +105,7 @@ static run_result bench_generate(
             double tok_per_sec = (result.n_tokens > 0) ? (result.n_tokens / (ms / 1000.0)) : 0;
             tps_samples.push_back(tok_per_sec);
             last_n_tokens = result.n_tokens;
-            last_confidence_spans = result.n_confidence_spans;
+            last_confidence_spans = lfg_session_confidence_pending(session);
         }
 
         lfg_session_free(session);

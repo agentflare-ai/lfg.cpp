@@ -447,26 +447,22 @@ TEST_CASE("Generate loop fires confidence callback") {
     auto tokens = tokenize(vocab, "The capital of France is Paris and the capital of Germany is Berlin", true);
     REQUIRE(lfg_session_ingest_tokens(session, tokens.data(), tokens.size(), true));
 
-    struct cb_state {
-        int count;
-        int total_span;
-    };
-    cb_state state = {0, 0};
-
     lfg_generate_config gc = lfg_generate_default_config();
     gc.max_tokens = 30;
-    gc.confidence_cb = [](const lfg_confidence_event *event, const float *, void *ud) {
-        auto *s = (cb_state *)ud;
-        s->count++;
-        s->total_span += event->span_length;
-    };
-    gc.confidence_cb_data = &state;
 
-    lfg_generate_result r = lfg_session_generate(session, gc);
+    lfg_session_generate(session, gc);
 
-    MESSAGE("Callback fired " << state.count << " times, total span tokens: " << state.total_span);
-    MESSAGE("n_confidence_spans in result: " << r.n_confidence_spans);
-    CHECK(r.n_confidence_spans == state.count);
+    int32_t pending = lfg_session_confidence_pending(session);
+    int count = 0;
+    int total_span = 0;
+    lfg_confidence_event ev{};
+    while (lfg_session_confidence_pop(session, &ev, nullptr, 0)) {
+        count++;
+        total_span += ev.span_length;
+    }
+
+    MESSAGE("Popped " << count << " confidence events, total span tokens: " << total_span);
+    CHECK(pending == count);
 
     lfg_session_free(session);
 }
@@ -598,8 +594,12 @@ TEST_CASE("Reasoning tokens break confidence runs by default") {
 
     lfg_generate_config gc = lfg_generate_default_config();
     gc.max_tokens = 30;
-    lfg_generate_result r1 = lfg_session_generate(session, gc);
-    int32_t events_include = r1.n_confidence_spans;
+    lfg_session_generate(session, gc);
+    int32_t events_include = 0;
+    lfg_confidence_event ev{};
+    while (lfg_session_confidence_pop(session, &ev, nullptr, 0)) {
+        events_include++;
+    }
     MESSAGE("Events with include_reasoning: " << events_include);
 
     // --- Run with default (include_reasoning = false, skip reasoning) ---
@@ -614,8 +614,11 @@ TEST_CASE("Reasoning tokens break confidence runs by default") {
 
     REQUIRE(lfg_session_ingest_tokens(session, tokens.data(), tokens.size(), true));
 
-    lfg_generate_result r2 = lfg_session_generate(session, gc);
-    int32_t events_default = r2.n_confidence_spans;
+    lfg_session_generate(session, gc);
+    int32_t events_default = 0;
+    while (lfg_session_confidence_pop(session, &ev, nullptr, 0)) {
+        events_default++;
+    }
     MESSAGE("Events with default (skip reasoning): " << events_default);
 
     // With reasoning tokens treated as run-breakers, events should be <= include

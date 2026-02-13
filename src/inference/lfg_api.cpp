@@ -104,7 +104,14 @@ struct lfg_confidence_ring_slot {
     float               *embedding;  // Points into confidence_embd_pool
 };
 
-// (Surprise monitor uses simple aggregate — no ring buffer needed)
+// ---------------------------------------------------------------------------
+// Internal surprise monitor types (pre-allocated at configure time)
+// ---------------------------------------------------------------------------
+
+struct lfg_surprise_ring_slot {
+    lfg_surprise_event event;
+    float             *embedding;  // Points into surprise_embd_pool
+};
 
 // ---------------------------------------------------------------------------
 // Opaque session struct (flat C, pre-allocated buffers)
@@ -268,11 +275,13 @@ struct lfg_session {
     float                surprise_sum;          // sum of surprises (for mean)
     float                surprise_max;          // max surprise
     int32_t              surprise_n_evaluated;  // total tokens evaluated
-    bool                 surprise_ready;        // event available for pop
-    bool                 surprise_popped;       // already consumed
 
-    // Single embedding buffer (allocated at configure time)
-    float               *surprise_embd;         // malloc'd, size = n_embd
+    // SPSC ring buffer (pre-allocated at configure time)
+    lfg_surprise_ring_slot *surprise_slots;
+    float                  *surprise_embd_pool;
+    int32_t                 surprise_ring_cap;
+    volatile int32_t        surprise_write_idx;
+    int32_t                 surprise_read_idx;
     int32_t              surprise_n_embd;
 
     // Last formatted prompt (captured by chat_generate / prompt_generate)
@@ -824,9 +833,23 @@ static bool session_ingest_internal(lfg_session *s, const lfg_token *tokens, siz
         }
     }
 
-    // Post-ingest: mark event ready if any tokens exceeded threshold
+    // Post-ingest: emit aggregate event if any tokens exceeded threshold
     if (s->surprise_active && s->surprise_count > 0) {
-        s->surprise_ready = true;
+        int32_t wi = s->surprise_write_idx;
+        int slot = wi % s->surprise_ring_cap;
+
+        float *slot_embd = s->surprise_embd_pool + (slot * s->surprise_n_embd);
+        bool got_embd = compute_query_embedding(s, slot_embd);
+
+        lfg_surprise_ring_slot *rs = &s->surprise_slots[slot];
+        rs->event.mean_surprise = s->surprise_sum / s->surprise_count;
+        rs->event.max_surprise = s->surprise_max;
+        rs->event.n_above_threshold = s->surprise_count;
+        rs->event.n_tokens_evaluated = s->surprise_n_evaluated;
+        rs->event.n_embd = got_embd ? s->surprise_n_embd : 0;
+        rs->embedding = got_embd ? slot_embd : nullptr;
+
+        __atomic_store_n(&s->surprise_write_idx, wi + 1, __ATOMIC_RELEASE);
     }
 
     // Update sampler + history + offsets
@@ -1037,9 +1060,11 @@ LFG_API lfg_session * lfg_session_create(lfg_model * model, const lfg_session_co
     s->surprise_sum = 0.0f;
     s->surprise_max = 0.0f;
     s->surprise_n_evaluated = 0;
-    s->surprise_ready = false;
-    s->surprise_popped = false;
-    s->surprise_embd = nullptr;
+    s->surprise_slots = nullptr;
+    s->surprise_embd_pool = nullptr;
+    s->surprise_ring_cap = 0;
+    s->surprise_write_idx = 0;
+    s->surprise_read_idx = 0;
     s->surprise_n_embd = 0;
 
     // Tool call parsing (pre-allocate buffers)
@@ -1122,7 +1147,10 @@ LFG_API void lfg_session_free(lfg_session * session) {
     free(session->confidence_text_buf);
 
     // Surprise monitor
-    free(session->surprise_embd);
+    session->surprise_write_idx = 0;
+    session->surprise_read_idx = 0;
+    free(session->surprise_slots);
+    free(session->surprise_embd_pool);
     free(session->surprise_per_token);
 
     // Last formatted prompt
@@ -1195,8 +1223,8 @@ LFG_API void lfg_session_reset(lfg_session * session) {
         session->surprise_sum = 0.0f;
         session->surprise_max = 0.0f;
         session->surprise_n_evaluated = 0;
-        session->surprise_ready = false;
-        session->surprise_popped = false;
+        session->surprise_write_idx = 0;
+        session->surprise_read_idx = 0;
         session->surprise_skip_tokens = 0;
     }
 
@@ -1416,6 +1444,13 @@ LFG_API bool lfg_session_ingest_tokens(lfg_session * session,
                                              size_t n_tokens,
                                              bool update_sampler) {
     if (!session || !tokens) return false;
+
+    if (session->surprise_active) {
+        session->surprise_count = 0;
+        session->surprise_sum = 0.0f;
+        session->surprise_max = 0.0f;
+        session->surprise_n_evaluated = 0;
+    }
 
     if (!session->config.enable_healing || n_tokens == 0) {
         return session_ingest_internal(session, tokens, n_tokens, update_sampler);
@@ -2604,6 +2639,7 @@ LFG_API volatile int32_t * lfg_session_confidence_counter(lfg_session * session)
 LFG_API lfg_surprise_monitor_config lfg_surprise_monitor_default_config(void) {
     lfg_surprise_monitor_config cfg{};
     cfg.threshold = 0.5f;
+    cfg.ring_size = 4;
     cfg.gate_mode = LFG_SURPRISE_GATE_FIXED;
     return cfg;
 }
@@ -2625,21 +2661,29 @@ LFG_API int32_t lfg_session_configure_surprise_monitor(
     }
 
     int32_t n_embd = lfg_model_n_embd_out(session->model);
+    int32_t cap = config->ring_size > 0 ? config->ring_size : 4;
 
-    // Free previous allocation
-    free(session->surprise_embd);
+    // Free previous allocations
+    free(session->surprise_slots);
+    free(session->surprise_embd_pool);
 
-    // Single embedding buffer
-    session->surprise_embd = (float *)calloc(n_embd, sizeof(float));
+    // Ring buffer + embedding pool
+    session->surprise_slots = (lfg_surprise_ring_slot *)calloc(cap, sizeof(lfg_surprise_ring_slot));
+    session->surprise_embd_pool = (float *)calloc(cap * n_embd, sizeof(float));
 
+    for (int32_t i = 0; i < cap; ++i) {
+        session->surprise_slots[i].embedding = session->surprise_embd_pool + (i * n_embd);
+    }
+
+    session->surprise_ring_cap     = cap;
+    session->surprise_write_idx    = 0;
+    session->surprise_read_idx     = 0;
     session->surprise_n_embd       = n_embd;
     session->surprise_threshold    = config->threshold;
     session->surprise_count        = 0;
     session->surprise_sum          = 0.0f;
     session->surprise_max          = 0.0f;
     session->surprise_n_evaluated  = 0;
-    session->surprise_ready        = false;
-    session->surprise_popped       = false;
     session->surprise_include_reasoning = config->include_reasoning;
     session->surprise_skip_tokens  = 0;
     session->surprise_gate_mode    = config->gate_mode;
@@ -2658,33 +2702,40 @@ LFG_API int32_t lfg_session_configure_surprise_monitor(
 LFG_API bool lfg_session_surprise_pop(lfg_session * session,
                                        lfg_surprise_event * event_out,
                                        float * embd_out, int32_t embd_cap) {
-    if (!session || !session->surprise_active) return false;
-    if (!session->surprise_ready || session->surprise_popped) return false;
+    if (!session || !session->surprise_active || !session->surprise_slots) return false;
 
-    // Build the aggregate event
-    lfg_surprise_event ev{};
-    ev.mean_surprise      = (session->surprise_count > 0)
-        ? (session->surprise_sum / session->surprise_count) : 0.0f;
-    ev.max_surprise       = session->surprise_max;
-    ev.n_above_threshold  = session->surprise_count;
-    ev.n_tokens_evaluated = session->surprise_n_evaluated;
-    ev.n_embd             = session->surprise_n_embd;
+    int32_t wi = __atomic_load_n(&session->surprise_write_idx, __ATOMIC_ACQUIRE);
+    if (session->surprise_read_idx >= wi) return false;
 
-    // Lazy embedding: compute on pop if caller wants it
-    if (embd_out && embd_cap >= session->surprise_n_embd && session->surprise_embd) {
-        bool got = compute_query_embedding(session, session->surprise_embd);
-        if (got) {
-            int32_t n = session->surprise_n_embd < embd_cap ? session->surprise_n_embd : embd_cap;
-            std::memcpy(embd_out, session->surprise_embd, n * sizeof(float));
-        } else {
-            ev.n_embd = 0;
-        }
+    int slot = session->surprise_read_idx % session->surprise_ring_cap;
+    lfg_surprise_ring_slot *rs = &session->surprise_slots[slot];
+
+    if (event_out) *event_out = rs->event;
+
+    if (embd_out && rs->embedding && rs->event.n_embd > 0) {
+        int32_t n = rs->event.n_embd < embd_cap ? rs->event.n_embd : embd_cap;
+        std::memcpy(embd_out, rs->embedding, n * sizeof(float));
     }
 
-    if (event_out) *event_out = ev;
-
-    session->surprise_popped = true;
+    session->surprise_read_idx++;
     return true;
+}
+
+LFG_API int32_t lfg_session_surprise_pending(lfg_session * session) {
+    if (!session || !session->surprise_slots) return 0;
+    int32_t wi = __atomic_load_n(&session->surprise_write_idx, __ATOMIC_ACQUIRE);
+    int32_t pending = wi - session->surprise_read_idx;
+    return pending > 0 ? pending : 0;
+}
+
+LFG_API void lfg_session_surprise_flush(lfg_session * session) {
+    if (!session) return;
+    session->surprise_read_idx = __atomic_load_n(&session->surprise_write_idx, __ATOMIC_ACQUIRE);
+}
+
+LFG_API volatile int32_t * lfg_session_surprise_counter(lfg_session * session) {
+    if (!session) return nullptr;
+    return &session->surprise_write_idx;
 }
 
 // ---------------------------------------------------------------------------
@@ -3305,12 +3356,6 @@ LFG_API lfg_generate_config lfg_generate_default_config(void) {
     cfg.include_history_reasoning = false;
     cfg.token_cb = nullptr;
     cfg.token_cb_data = nullptr;
-    cfg.entropy_cb = nullptr;
-    cfg.entropy_cb_data = nullptr;
-    cfg.confidence_cb = nullptr;
-    cfg.confidence_cb_data = nullptr;
-    cfg.surprise_cb = nullptr;
-    cfg.surprise_cb_data = nullptr;
     cfg.tool_call_cb = nullptr;
     cfg.tool_call_cb_data = nullptr;
     cfg.max_tool_rounds = 0;
@@ -3346,35 +3391,6 @@ LFG_API lfg_generate_result lfg_session_generate(
         n = lfg_tokenize(vocab, "<|tool_call_end|>", 17, toks, 4, false, true);
         session->tool_call_end_token = (n == 1) ? toks[0] : LFG_TOKEN_NULL;
         session->tool_call_tokens_cached = true;
-    }
-
-    // Pre-allocate embedding buffer for entropy callbacks (zero-alloc in hot path)
-    float *embd_buf = nullptr;
-    if (config.entropy_cb && session->entropy_active && session->entropy_n_embd > 0) {
-        embd_buf = (float *)alloca(session->entropy_n_embd * sizeof(float));
-    }
-
-    // Pre-allocate embedding buffer for confidence callbacks
-    float *conf_embd_buf = nullptr;
-    if (config.confidence_cb && session->confidence_active && session->confidence_n_embd > 0) {
-        conf_embd_buf = (float *)alloca(session->confidence_n_embd * sizeof(float));
-    }
-
-    // Drain surprise event from prompt ingestion (before generation loop)
-    if (config.surprise_cb && session->surprise_active && session->surprise_ready && !session->surprise_popped) {
-        float *surp_embd_buf = nullptr;
-        if (session->surprise_n_embd > 0) {
-            surp_embd_buf = (float *)alloca(session->surprise_n_embd * sizeof(float));
-        }
-        lfg_surprise_event sev;
-        if (lfg_session_surprise_pop(session, &sev, surp_embd_buf, session->surprise_n_embd)) {
-            config.surprise_cb(&sev, sev.n_embd > 0 ? surp_embd_buf : nullptr,
-                               config.surprise_cb_data);
-            result.n_surprise_events = 1;
-        }
-    } else if (session->surprise_active) {
-        // No callback — mark as consumed
-        session->surprise_popped = true;
     }
 
     // -----------------------------------------------------------------------
@@ -3499,55 +3515,6 @@ LFG_API lfg_generate_result lfg_session_generate(
             total_tokens += i + 1;
             stopped = true;
             break;
-        }
-
-        // Entropy callback — pop with embedding, let callback pick text to inject.
-        if (config.entropy_cb && session->entropy_active) {
-            lfg_entropy_event ev;
-            if (lfg_session_entropy_pop(session, &ev, embd_buf, session->entropy_n_embd)) {
-                const float *embd_ptr = ev.n_embd > 0 ? embd_buf : nullptr;
-                const char *inject = config.entropy_cb(&ev, embd_ptr, config.entropy_cb_data);
-                if (inject) {
-                    // Rewind to checkpoint, tokenize injected text, ingest, continue
-                    if (lfg_session_rewind(session, ev.checkpoint_id)) {
-                        int32_t len = (int32_t)std::strlen(inject);
-                        int32_t tok_cap = len + 16;
-                        lfg_token *inject_toks = (lfg_token *)alloca(tok_cap * sizeof(lfg_token));
-                        int32_t n_inj = lfg_tokenize(vocab, inject, len,
-                                                      inject_toks, tok_cap, false, false);
-                        if (n_inj < 0) {
-                            // Need more space — fall back to malloc
-                            tok_cap = -n_inj;
-                            lfg_token *heap_toks = (lfg_token *)malloc(tok_cap * sizeof(lfg_token));
-                            n_inj = lfg_tokenize(vocab, inject, len,
-                                                  heap_toks, tok_cap, false, false);
-                            if (n_inj > 0) {
-                                lfg_session_ingest_tokens(session, heap_toks, n_inj, false);
-                            }
-                            free(heap_toks);
-                        } else if (n_inj > 0) {
-                            lfg_session_ingest_tokens(session, inject_toks, n_inj, false);
-                        }
-                        result.n_retrievals++;
-                        lfg_session_entropy_flush(session);
-                        stop_buf_count = 0;  // Rewound — buffered tokens are invalid
-                        continue;  // re-decode from injected position
-                    }
-                }
-                lfg_session_entropy_flush(session);
-            }
-        } else if (session->entropy_active) {
-            lfg_session_entropy_flush(session);
-        }
-
-        // Confidence callback — informational, no rewind
-        if (config.confidence_cb && session->confidence_active) {
-            lfg_confidence_event cev;
-            while (lfg_session_confidence_pop(session, &cev, conf_embd_buf, session->confidence_n_embd)) {
-                const float *cembd_ptr = cev.n_embd > 0 ? conf_embd_buf : nullptr;
-                config.confidence_cb(&cev, cembd_ptr, config.confidence_cb_data);
-                result.n_confidence_spans++;
-            }
         }
 
         // Token callback with stop look-ahead buffering (token + text level)
@@ -3748,16 +3715,6 @@ LFG_API lfg_generate_result lfg_session_generate(
         session->confidence_run_count = 0;
         session->confidence_run_entropy_sum = 0.0f;
         session->confidence_run_min_entropy = 1.0f;
-    }
-
-    // Drain any remaining confidence events through the callback
-    if (config.confidence_cb && session->confidence_active) {
-        lfg_confidence_event cev;
-        while (lfg_session_confidence_pop(session, &cev, conf_embd_buf, session->confidence_n_embd)) {
-            const float *cembd_ptr = cev.n_embd > 0 ? conf_embd_buf : nullptr;
-            config.confidence_cb(&cev, cembd_ptr, config.confidence_cb_data);
-            result.n_confidence_spans++;
-        }
     }
 
     return result;

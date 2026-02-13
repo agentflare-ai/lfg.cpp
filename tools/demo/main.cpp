@@ -301,6 +301,10 @@ static const char *generic_tool_fn(const char * /*arguments*/, void * /*user_dat
     return strdup(R"({"status": "ok", "note": "stub response"})");
 }
 
+// list_tools: user_data points to the EXAMPLE_TOOLS array, fn_user_data encodes count in low bits.
+// We pass (void*)(intptr_t)N_EXAMPLE_TOOLS as user_data at registration.
+static const char *list_tools_fn(const char * /*arguments*/, void *user_data);
+
 // ---------------------------------------------------------------------------
 // Example tools for tool ranking visualization
 // ---------------------------------------------------------------------------
@@ -357,9 +361,23 @@ static const lfg_tool_desc EXAMPLE_TOOLS[] = {
     {"list_tools",
      "List all the tools and capabilities you can do",
      R"({"type":"object","properties":{}})",
-     generic_tool_fn, nullptr},
+     list_tools_fn, nullptr},
 };
 static constexpr int N_EXAMPLE_TOOLS = sizeof(EXAMPLE_TOOLS) / sizeof(EXAMPLE_TOOLS[0]);
+
+static const char *list_tools_fn(const char * /*arguments*/, void * /*user_data*/) {
+    std::string json = "{\"tools\": [";
+    for (int i = 0; i < N_EXAMPLE_TOOLS; i++) {
+        if (i > 0) json += ", ";
+        json += "{\"name\": \"";
+        json += EXAMPLE_TOOLS[i].name;
+        json += "\", \"description\": \"";
+        json += EXAMPLE_TOOLS[i].description;
+        json += "\"}";
+    }
+    json += "]}";
+    return strdup(json.c_str());
+}
 
 struct AppState {
     std::mutex mtx;
@@ -629,18 +647,6 @@ static void inference_thread_func(AppState *state) {
         // Auto tool execution: tool_call_observer logs to Tools tab
         gen_cfg.tool_call_cb = tool_call_observer;
         gen_cfg.tool_call_cb_data = state;
-        if (state->surprise_enabled) {
-            gen_cfg.surprise_cb = surprise_callback;
-            gen_cfg.surprise_cb_data = state;
-        }
-        if (state->entropy_enabled) {
-            gen_cfg.entropy_cb = entropy_callback;
-            gen_cfg.entropy_cb_data = state;
-        }
-        if (state->confidence_enabled) {
-            gen_cfg.confidence_cb = confidence_callback;
-            gen_cfg.confidence_cb_data = state;
-        }
     }
 
     // Convert to lfg_chat_message array.
@@ -1190,6 +1196,11 @@ static void draw_chat_panel(AppState *state) {
     // Input area
     bool can_send = state->model_loaded && state->session && !state->generating;
 
+    static bool refocus_input = false;
+    if (refocus_input) {
+        ImGui::SetKeyboardFocusHere();
+        refocus_input = false;
+    }
     ImGui::PushItemWidth(-80);
     bool enter_pressed = ImGui::InputText("##chat_input", chat_input_buf, sizeof(chat_input_buf),
                                           ImGuiInputTextFlags_EnterReturnsTrue);
@@ -1237,6 +1248,7 @@ static void draw_chat_panel(AppState *state) {
             }
 
             std::thread(inference_thread_func, state).detach();
+            refocus_input = true;
         }
     }
 

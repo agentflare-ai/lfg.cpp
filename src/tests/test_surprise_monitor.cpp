@@ -247,10 +247,10 @@ TEST_CASE("Reset clears state") {
 }
 
 // ---------------------------------------------------------------------------
-// Test 8: Generate loop drains event via callback
+// Test 8: Generate loop leaves surprise events in queue
 // ---------------------------------------------------------------------------
 
-TEST_CASE("Generate loop drains surprise event via callback") {
+TEST_CASE("Generate loop does not drain surprise queue") {
     lfg_model *model = get_350m();
     REQUIRE(model != nullptr);
 
@@ -270,30 +270,19 @@ TEST_CASE("Generate loop drains surprise event via callback") {
     auto tokens = tokenize(vocab, "xyzzy plugh blort quux zorp fnord mxyzptlk blargh", true);
     REQUIRE(lfg_session_ingest_tokens(session, tokens.data(), tokens.size(), true));
 
-    struct cb_state {
-        int count;
-        int above;
-    };
-    cb_state state = {0, 0};
-
     lfg_generate_config gc = lfg_generate_default_config();
     gc.max_tokens = 10;
-    gc.surprise_cb = [](const lfg_surprise_event *event, const float *, void *ud) {
-        auto *s = (cb_state *)ud;
-        s->count++;
-        s->above = event->n_above_threshold;
-    };
-    gc.surprise_cb_data = &state;
+    lfg_session_generate(session, gc);
 
-    lfg_generate_result r = lfg_session_generate(session, gc);
-
-    MESSAGE("Callback fired " << state.count << " times, above_threshold: " << state.above);
-    CHECK(state.count <= 1);  // At most one event
-    CHECK(r.n_surprise_events == state.count);
-
-    // After generate, pop should return false (already consumed)
+    // Event remains queued for external consumer.
+    int32_t pending_before = lfg_session_surprise_pending(session);
+    CHECK(pending_before >= 0);
     lfg_surprise_event ev;
-    CHECK_FALSE(lfg_session_surprise_pop(session, &ev, nullptr, 0));
+    bool got = lfg_session_surprise_pop(session, &ev, nullptr, 0);
+    if (pending_before > 0) {
+        CHECK(got);
+    }
+    CHECK(lfg_session_surprise_pending(session) == (got ? pending_before - 1 : pending_before));
 
     lfg_session_free(session);
 }
@@ -420,9 +409,18 @@ TEST_CASE("API without monitor returns safe defaults") {
     lfg_session *session = lfg_session_create(model, &config);
     REQUIRE(session != nullptr);
 
-    // No surprise monitor configured — pop should return false
+    // No surprise monitor configured
+    CHECK(lfg_session_surprise_pending(session) == 0);
+
     lfg_surprise_event ev;
     CHECK_FALSE(lfg_session_surprise_pop(session, &ev, nullptr, 0));
+
+    volatile int32_t *counter = lfg_session_surprise_counter(session);
+    REQUIRE(static_cast<const void *>(const_cast<const int32_t *>(counter)) != nullptr);
+    CHECK(*counter == 0);
+
+    lfg_session_surprise_flush(session);
+    CHECK(lfg_session_surprise_pending(session) == 0);
 
     lfg_session_free(session);
 }
@@ -575,21 +573,13 @@ TEST_CASE("Chat-scoped surprise evaluates only last turn") {
     lfg_generate_config gc = lfg_generate_default_config();
     gc.max_tokens = 5;
 
-    struct cb_state { int count; int evaluated; };
-    cb_state state = {0, 0};
-    gc.surprise_cb = [](const lfg_surprise_event *event, const float *, void *ud) {
-        auto *s = (cb_state *)ud;
-        s->count++;
-        s->evaluated = event->n_tokens_evaluated;
-    };
-    gc.surprise_cb_data = &state;
+    lfg_session_chat_generate(session, messages, 3, gc);
 
-    lfg_generate_result r = lfg_session_chat_generate(session, messages, 3, gc);
-    (void)r;
+    lfg_surprise_event ev{};
+    bool got = lfg_session_surprise_pop(session, &ev, nullptr, 0);
+    MESSAGE("Chat surprise queued=" << got << " evaluated=" << ev.n_tokens_evaluated);
 
-    MESSAGE("Chat surprise: count=" << state.count << " evaluated=" << state.evaluated);
-
-    if (state.count > 0) {
+    if (got) {
         // The evaluated token count should be much less than the full prompt
         // (only the last user turn, not the system+first user turn)
         auto full_prompt_toks = tokenize(vocab,
@@ -597,7 +587,7 @@ TEST_CASE("Chat-scoped surprise evaluates only last turn") {
             "What is the capital of France?"
             "xyzzy plugh blort quux zorp fnord", true);
         MESSAGE("Full prompt token count: " << full_prompt_toks.size());
-        CHECK(state.evaluated < (int)full_prompt_toks.size());
+        CHECK(ev.n_tokens_evaluated < (int)full_prompt_toks.size());
     }
 
     lfg_session_free(session);

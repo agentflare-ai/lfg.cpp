@@ -255,11 +255,6 @@ typedef struct lfg_confidence_monitor_config {
     lfg_confidence_gate_mode gate_mode;  // Gating mode. 0 = OFF, 1 = FIXED (default), 2 = AUTO.
 } lfg_confidence_monitor_config;
 
-// Called when a sustained low-entropy span ends. Receives event + mean-pooled embedding.
-// Informational only — no rewind needed for store.
-typedef void (*lfg_generate_confidence_cb)(
-    const lfg_confidence_event * event, const float * embedding, void * user_data);
-
 LFG_API lfg_confidence_monitor_config lfg_confidence_monitor_default_config(void);
 
 // Configure. Allocates ring buffer + embedding context. Pass NULL to disable.
@@ -296,28 +291,26 @@ typedef enum {
 
 typedef struct lfg_surprise_monitor_config {
     float    threshold;          // Normalized surprise floor (0,1]. Above = surprising.
+    int32_t  ring_size;          // Ring buffer slots. 0 = default (4).
     bool     include_reasoning;  // false (default) = skip reasoning tokens; true = include them.
     lfg_surprise_gate_mode gate_mode;  // Gating mode. 0 = OFF, 1 = FIXED (default), 2 = AUTO.
 } lfg_surprise_monitor_config;
 
-// Called after prompt ingestion with the aggregate surprise result.
-// Receives event + mean-pooled embedding. Informational only.
-typedef void (*lfg_generate_surprise_cb)(
-    const lfg_surprise_event * event, const float * embedding, void * user_data);
-
 LFG_API lfg_surprise_monitor_config lfg_surprise_monitor_default_config(void);
 
-// Configure. Allocates embedding buffer + context. Pass NULL to disable.
+// Configure. Allocates ring buffer + embedding context. Pass NULL to disable.
 // Returns n_embd (> 0) on success, 0 on failure or disable.
 LFG_API int32_t lfg_session_configure_surprise_monitor(
     lfg_session * session, const lfg_surprise_monitor_config * config);
 
-// Pop the aggregate surprise event. Returns true once after ingestion
-// (if any tokens exceeded threshold), then false on subsequent calls.
-// Copies embedding into embd_out. Pass NULL for embd_out to skip embedding.
+// Pop next pending event. Copies embedding into embd_out.
+// Pass NULL for embd_out to skip embedding copy. Returns false if none pending.
 LFG_API bool lfg_session_surprise_pop(lfg_session * session,
                                        lfg_surprise_event * event_out,
                                        float * embd_out, int32_t embd_cap);
+LFG_API int32_t lfg_session_surprise_pending(lfg_session * session);
+LFG_API void    lfg_session_surprise_flush(lfg_session * session);
+LFG_API volatile int32_t * lfg_session_surprise_counter(lfg_session * session);
 
 // --- Embedding API ---
 
@@ -345,13 +338,6 @@ typedef enum { LFG_GENERATE_CONTINUE = 0, LFG_GENERATE_STOP = 1 } lfg_generate_a
 typedef lfg_generate_action (*lfg_generate_token_cb)(
     lfg_token token, const char * piece, int32_t piece_len, void * user_data);
 
-// Called when entropy exceeds threshold. Receives event + embedding for KB matching.
-// embedding is n_embd floats (event->n_embd), or NULL if embed failed.
-// Return a C string to inject (generate loop handles rewind + tokenize + ingest),
-// or NULL to skip this event and keep generating. String must be valid until callback returns.
-typedef const char * (*lfg_generate_entropy_cb)(
-    const lfg_entropy_event * event, const float * embedding, void * user_data);
-
 typedef struct lfg_generate_config {
     int32_t  max_tokens;          // Hard token limit. 0 = use session config.
 
@@ -360,15 +346,9 @@ typedef struct lfg_generate_config {
                                          // from assistant messages in history.
                                          // Saves context for multi-turn chat.
 
-    // Callbacks (nullable — NULL means no callback)
+    // Streaming callback (nullable — NULL means no callback)
     lfg_generate_token_cb      token_cb;
     void                     * token_cb_data;
-    lfg_generate_entropy_cb    entropy_cb;
-    void                     * entropy_cb_data;
-    lfg_generate_confidence_cb confidence_cb;
-    void                     * confidence_cb_data;
-    lfg_generate_surprise_cb   surprise_cb;
-    void                     * surprise_cb_data;
 
     // Auto tool execution (observational callback + round limit)
     lfg_tool_call_cb           tool_call_cb;       // nullable, fired after each auto-executed tool call
@@ -386,15 +366,15 @@ typedef enum {
 
 typedef struct lfg_generate_result {
     int32_t          n_tokens;            // Tokens generated
-    int32_t          n_retrievals;        // Number of entropy-triggered rewind+inject cycles
-    int32_t          n_confidence_spans;  // Number of confidence events fired during generation
-    int32_t          n_surprise_events;   // 0 or 1 — whether input surprise event was produced
+    int32_t          n_retrievals;        // Reserved (always 0). Retrieval is caller-orchestrated via entropy_pop.
+    int32_t          n_confidence_spans;  // Reserved (always 0). Consume confidence events via confidence_pop.
+    int32_t          n_surprise_events;   // Reserved (always 0). Consume surprise events via surprise_pop.
     int32_t          n_tool_calls;        // Number of parsed tool calls (0 if none or non-tool-call stop)
     int32_t          n_tool_rounds;       // Auto-execution rounds completed (0 if no auto-execution)
     lfg_stop_reason  stop_reason;         // Why generation stopped
 } lfg_generate_result;
 
-// Default generate config (max_tokens=0, all callbacks NULL).
+// Default generate config (max_tokens=0, token/tool callbacks NULL).
 LFG_API lfg_generate_config lfg_generate_default_config(void);
 
 // Generate from current session state (prompt already ingested).

@@ -65,8 +65,6 @@ TEST_CASE("lfg_generate_default_config - zeroed") {
     CHECK(gc.max_tokens == 0);
     CHECK(gc.token_cb == nullptr);
     CHECK(gc.token_cb_data == nullptr);
-    CHECK(gc.entropy_cb == nullptr);
-    CHECK(gc.entropy_cb_data == nullptr);
 }
 
 TEST_CASE("lfg_session_generate - null session returns zero result") {

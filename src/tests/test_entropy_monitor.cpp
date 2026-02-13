@@ -685,20 +685,13 @@ TEST_CASE("Integration: Confidence store collects spans during retrieval generat
         std::vector<float>   embedding;
     };
 
-    struct cb_state {
-        // Confidence store
+    struct loop_state {
         std::vector<store_entry> stored;
-        int32_t n_embd;
-
-        // Entropy retrieval
-        const std::vector<kb_entry> *kb;
         int retrievals;
         int max_retrievals;
     };
 
-    cb_state state;
-    state.n_embd = n_embd;
-    state.kb = &kb;
+    loop_state state{};
     state.retrievals = 0;
     state.max_retrievals = 2;
 
@@ -707,53 +700,68 @@ TEST_CASE("Integration: Confidence store collects spans during retrieval generat
     auto toks = tokenize(vocab, prompt, true);
     lfg_session_ingest_tokens(session, toks.data(), toks.size(), true);
 
-    // Generate with both callbacks via the generate loop
-    lfg_generate_config gc = lfg_generate_default_config();
-    gc.max_tokens = 80;
+    int generated = 0;
+    std::vector<float> embd_buf(n_embd);
+    std::vector<float> conf_embd_buf(n_embd);
 
-    // Entropy callback — retrieve from KB
-    gc.entropy_cb = [](const lfg_entropy_event *ev, const float *embd, void *ud) -> const char * {
-        auto *s = (cb_state *)ud;
-        if (s->retrievals >= s->max_retrievals || !embd) return nullptr;
-
-        int best_idx = -1;
-        float best_score = -1.0f;
-        for (int k = 0; k < (int)s->kb->size(); ++k) {
-            float score = cosine_similarity(embd, (*s->kb)[k].embedding.data(), s->n_embd);
-            if (score > best_score) { best_score = score; best_idx = k; }
+    for (int i = 0; i < 80; ++i) {
+        lfg_session_decode(session);
+        lfg_token tok = lfg_session_sample(session);
+        generated++;
+        if (lfg_vocab_is_eog(vocab, tok)) {
+            break;
         }
 
-        if (best_idx >= 0 && best_score > 0.0f) {
-            s->retrievals++;
-            // Return the fact text — generate loop handles rewind + inject
-            return (*s->kb)[best_idx].text.c_str();
-        }
-        return nullptr;
-    };
-    gc.entropy_cb_data = &state;
+        // Entropy-triggered retrieval (external loop owned by caller).
+        lfg_entropy_event ev;
+        if (state.retrievals < state.max_retrievals &&
+            lfg_session_entropy_pop(session, &ev, embd_buf.data(), n_embd)) {
+            int best_idx = -1;
+            float best_score = -1.0f;
+            for (int k = 0; k < (int)kb.size(); ++k) {
+                float score = cosine_similarity(embd_buf.data(), kb[k].embedding.data(), n_embd);
+                if (score > best_score) { best_score = score; best_idx = k; }
+            }
 
-    // Confidence callback — store confident spans
-    gc.confidence_cb = [](const lfg_confidence_event *ev, const float *embd, void *ud) {
-        auto *s = (cb_state *)ud;
+            if (best_idx >= 0 && best_score > 0.0f && lfg_session_rewind(session, ev.checkpoint_id)) {
+                auto inj = tokenize(vocab, kb[best_idx].text, false);
+                lfg_session_ingest_tokens(session, inj.data(), inj.size(), false);
+                state.retrievals++;
+                lfg_session_entropy_flush(session);
+                continue;
+            }
+            lfg_session_entropy_flush(session);
+        } else {
+            lfg_session_entropy_flush(session);
+        }
+
+        // Drain confidence events and store for verification.
+        lfg_confidence_event cev;
+        while (lfg_session_confidence_pop(session, &cev, conf_embd_buf.data(), n_embd)) {
+            store_entry entry;
+            entry.event = cev;
+            if (cev.n_embd > 0) {
+                entry.embedding.assign(conf_embd_buf.begin(), conf_embd_buf.begin() + cev.n_embd);
+            }
+            state.stored.push_back(std::move(entry));
+        }
+
+        lfg_session_ingest_tokens(session, &tok, 1, false);
+    }
+
+    lfg_confidence_event cev;
+    while (lfg_session_confidence_pop(session, &cev, conf_embd_buf.data(), n_embd)) {
         store_entry entry;
-        entry.event = *ev;
-        if (embd && ev->n_embd > 0) {
-            entry.embedding.assign(embd, embd + ev->n_embd);
+        entry.event = cev;
+        if (cev.n_embd > 0) {
+            entry.embedding.assign(conf_embd_buf.begin(), conf_embd_buf.begin() + cev.n_embd);
         }
-        s->stored.push_back(std::move(entry));
-    };
-    gc.confidence_cb_data = &state;
+        state.stored.push_back(std::move(entry));
+    }
 
-    lfg_generate_result result = lfg_session_generate(session, gc);
-
-    MESSAGE("Generated " << result.n_tokens << " tokens");
-    MESSAGE("Retrievals: " << result.n_retrievals);
+    MESSAGE("Generated " << generated << " tokens");
+    MESSAGE("Retrievals: " << state.retrievals);
     MESSAGE("Confidence spans stored: " << state.stored.size());
-    MESSAGE("n_confidence_spans in result: " << result.n_confidence_spans);
-
-    // Result counters should match callback invocations
-    CHECK(result.n_confidence_spans == (int32_t)state.stored.size());
-    CHECK(result.n_retrievals == state.retrievals);
 
     // --- Verify stored spans ---
     if (!state.stored.empty()) {
