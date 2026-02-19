@@ -1034,8 +1034,9 @@ fn addTests(
         "test_structured_double_accept",
         "test_reasoning_healing_integration",
         "test_complex_reasoning_healing",
-        "test_reasoning_budget",
+        "test_reasoning_streaming_markers",
         "test_reasoning_gate",
+        "test_thinking_split",
         "test_model_capabilities",
         "test_parity",
         "test_softmax_safety",
@@ -1077,8 +1078,9 @@ fn addTests(
         "src/tests/test_structured_double_accept.cpp",
         "src/tests/test_reasoning_healing_integration.cpp",
         "src/tests/test_complex_reasoning_healing.cpp",
-        "src/tests/test_reasoning_budget.cpp",
+        "src/tests/test_reasoning_streaming_markers.cpp",
         "src/tests/test_reasoning_gate.cpp",
+        "src/tests/test_thinking_split.cpp",
         "src/tests/test_model_capabilities.cpp",
         "src/tests/test_parity.cpp",
         "src/tests/test_softmax_safety.cpp",
@@ -1113,7 +1115,7 @@ fn addTests(
         exe.addIncludePath(b.path("src/loader"));
         exe.addIncludePath(spdlog_include);
         exe.linkLibrary(lfg_core);
-        if (std.mem.eql(u8, name, "test_reasoning_healing_integration") or std.mem.eql(u8, name, "test_complex_reasoning_healing") or std.mem.eql(u8, name, "test_reasoning_budget") or std.mem.eql(u8, name, "test_reasoning_gate")) {
+        if (std.mem.eql(u8, name, "test_reasoning_healing_integration") or std.mem.eql(u8, name, "test_complex_reasoning_healing") or std.mem.eql(u8, name, "test_reasoning_streaming_markers") or std.mem.eql(u8, name, "test_reasoning_gate")) {
             exe.linkLibrary(ggml);
         }
         addCommonExeLinks(exe, target, framework_path, private_framework_path, sysroot);

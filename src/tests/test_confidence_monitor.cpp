@@ -574,7 +574,6 @@ TEST_CASE("Reasoning tokens break confidence runs by default") {
     lfg_session_config config = lfg_session_default_config();
     config.n_ctx = 2048;
     config.sampling.temp = 0.0f;
-    config.reasoning_budget = 50;
     lfg_session *session = lfg_session_create(model, &config);
     REQUIRE(session != nullptr);
 

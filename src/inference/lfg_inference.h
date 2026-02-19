@@ -1394,18 +1394,6 @@ extern "C" {
                           const char * grammar_str,
                           const char * grammar_root);
 
-    /// @details Reasoning budget sampler. Enforces a maximum number of tokens for reasoning/thinking blocks.
-    /// @param budget The maximum number of tokens allowed within a reasoning block.
-    /// @param start_tokens The sequence of tokens that start a reasoning block.
-    /// @param n_start The number of tokens in the start sequence.
-    /// @param end_tokens The sequence of tokens that end a reasoning block.
-    /// @param n_end The number of tokens in the end sequence.
-    LFG_API struct lfg_sampler * lfg_sampler_init_reasoning_budget(
-            int32_t budget,
-            const lfg_token * start_tokens,
-            size_t n_start,
-            const lfg_token * end_tokens,
-            size_t n_end);
 
     DEPRECATED(LFG_API struct lfg_sampler * lfg_sampler_init_grammar_lazy(
             const struct lfg_vocab * vocab,

@@ -32,7 +32,7 @@ All three monitors produce mean-pooled, L2-normalized embeddings alongside their
 
 **Tool execution doesn't break the KV cache.** Most tool-calling implementations generate, stop, parse the tool call, execute, rebuild the entire prompt with the result, and re-encode everything from scratch. lfg.cpp appends the tool result as a continuation directly into the existing KV cache and resumes generation. For a 2K-token conversation, that's 2K tokens you don't re-encode per tool round. The engine handles the full cycle — embedding-based ranking, prompt injection of top-K tools, structured parsing, callback execution, result injection, and continuation — across multiple rounds without session resets.
 
-**Structured output is reasoning-aware.** Grammar constraints (GBNF or JSON Schema) are automatically suspended inside `<think>...</think>` blocks so the model reasons freely, then constrained output resumes. A reasoning budget sampler enforces a hard token cap on thinking.
+**Structured output is reasoning-aware.** Grammar constraints (GBNF or JSON Schema) are automatically suspended inside `<think>...</think>` blocks so the model reasons freely, then constrained output resumes. A reasoning soft-limit sampler biases `</think>` after a configurable token threshold (no hard cap).
 
 ## Why it's fast
 
@@ -246,8 +246,6 @@ Grammar constraints are automatically suspended inside `<think>...</think>` bloc
 // Configure reasoning delimiters
 lfg_session_configure_reasoning(session, start_tokens, n_start, end_tokens, n_end);
 
-// Enforce a token budget on thinking (optional)
-session_config.reasoning_budget = 512;
 ```
 
 ### Checkpointing

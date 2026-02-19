@@ -42,26 +42,43 @@ struct ChatMessage {
         thinking_out.clear();
         output_out.clear();
 
-        size_t open_pos = text.find(THINK_OPEN);
-        if (open_pos == std::string::npos) {
-            // No thinking block — everything is output
-            output_out = text;
-            return;
+        // Parse sequentially so multiple <think> blocks don't reclassify
+        // already-emitted content.
+        size_t i = 0;
+        while (i < text.size()) {
+            size_t open_pos = text.find(THINK_OPEN, i);
+            if (open_pos == std::string::npos) {
+                output_out.append(text.substr(i));
+                break;
+            }
+            output_out.append(text.substr(i, open_pos - i));
+            size_t content_start = open_pos + OPEN_LEN;
+            size_t close_pos = text.find(THINK_CLOSE, content_start);
+            if (close_pos == std::string::npos) {
+                thinking_out.append(text.substr(content_start));
+                break;
+            }
+            thinking_out.append(text.substr(content_start, close_pos - content_start));
+            i = close_pos + CLOSE_LEN;
         }
+    }
 
-        // Text before <think> (if any) is output
-        output_out = text.substr(0, open_pos);
+    bool has_unclosed_think() const {
+        static const char *THINK_OPEN  = "<think>";
+        static const char *THINK_CLOSE = "</think>";
+        static const size_t OPEN_LEN  = 7;
+        static const size_t CLOSE_LEN = 8;
 
-        size_t think_start = open_pos + OPEN_LEN;
-        size_t close_pos = text.find(THINK_CLOSE, think_start);
-        if (close_pos == std::string::npos) {
-            // Still thinking (no close tag yet)
-            thinking_out = text.substr(think_start);
-        } else {
-            thinking_out = text.substr(think_start, close_pos - think_start);
-            // Text after </think> is output
-            output_out += text.substr(close_pos + CLOSE_LEN);
+        size_t i = 0;
+        while (i < text.size()) {
+            size_t open_pos = text.find(THINK_OPEN, i);
+            if (open_pos == std::string::npos) return false;
+            size_t content_start = open_pos + OPEN_LEN;
+            size_t close_pos = text.find(THINK_CLOSE, content_start);
+            if (close_pos == std::string::npos) return true;
+            i = close_pos + CLOSE_LEN;
         }
+        return false;
     }
 };
 
@@ -957,7 +974,6 @@ static void draw_settings_panel(AppState *state) {
         changed |= ImGui::SliderInt("Threads", &state->session_cfg.n_threads, 1, 16);
         changed |= ImGui::SliderInt("Context", &state->session_cfg.n_ctx, 128, 8192);
         changed |= ImGui::SliderInt("Batch", &state->session_cfg.n_batch, 32, 2048);
-        changed |= ImGui::InputInt("Reasoning Budget", &state->session_cfg.reasoning_budget);
     }
 
     if (ImGui::CollapsingHeader("Generation", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -1163,7 +1179,7 @@ static void draw_chat_panel(AppState *state) {
             if (!thinking.empty()) {
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 0.7f));
                 bool still_thinking = state->generating && i == state->messages.size() - 1 &&
-                                      msg.text.find("</think>") == std::string::npos;
+                                      msg.has_unclosed_think();
                 char header[32];
                 snprintf(header, sizeof(header), "%s##think%d",
                          still_thinking ? "Thinking..." : "Thinking", (int)i);

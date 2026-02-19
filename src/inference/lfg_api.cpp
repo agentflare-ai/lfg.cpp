@@ -168,7 +168,6 @@ struct lfg_session {
     // Reasoning state tracking (mirrors old InferenceCore fields)
     bool   in_reasoning;
     size_t reasoning_token_count;
-    int    forcing_reasoning_end_index;  // -1 = not forcing
 
     // Scratch (pre-allocated to n_batch)
     lfg_pos *pos_buf;      size_t pos_buf_cap;
@@ -516,40 +515,9 @@ static bool tokenize_literal(const lfg_vocab *vocab, const char *text, bool spec
     return true;
 }
 
-static bool session_model_is_thinking(const lfg_session *s, const char *tmpl_str) {
-    if (!s || !s->model) return false;
-    if (tmpl_str && std::strstr(tmpl_str, "<think>") != nullptr) {
-        return true;
-    }
-    char name_buf[256];
-    const int32_t n = lfg_model_get_metadata_str(s->model, "general.name", name_buf, sizeof(name_buf));
-    if (n > 0) {
-        std::string name(name_buf, (size_t)n);
-        std::transform(name.begin(), name.end(), name.begin(),
-                       [] (const std::string::value_type x) { return std::tolower(x); });
-        if (name.find("thinking") != std::string::npos) return true;
-    }
-
-    const lfg_vocab *vocab = lfg_model_get_vocab(s->model);
-    if (!vocab) return false;
-    std::vector<lfg_token> start_tokens;
-    std::vector<lfg_token> end_tokens;
-    if (!tokenize_literal(vocab, "<think>", true, start_tokens)) return false;
-    if (!tokenize_literal(vocab, "</think>", true, end_tokens)) return false;
-    if (start_tokens.size() != 1 || end_tokens.size() != 1) return false;
-    const lfg_token_attr start_attr = lfg_vocab_get_attr(vocab, start_tokens[0]);
-    const lfg_token_attr end_attr = lfg_vocab_get_attr(vocab, end_tokens[0]);
-    const bool start_control = (start_attr & LFG_TOKEN_ATTR_CONTROL) ||
-                               (start_attr & LFG_TOKEN_ATTR_USER_DEFINED);
-    const bool end_control = (end_attr & LFG_TOKEN_ATTR_CONTROL) ||
-                             (end_attr & LFG_TOKEN_ATTR_USER_DEFINED);
-    return start_control && end_control;
-}
-
 static bool session_auto_configure_reasoning_from_markers(lfg_session *s, const char *tmpl_str) {
     if (!s) return false;
     if (s->reasoning_start_count > 0 || s->reasoning_end_count > 0) return false;
-    if (!session_model_is_thinking(s, tmpl_str)) return false;
     const lfg_vocab *vocab = lfg_model_get_vocab(s->model);
     if (!vocab) return false;
 
@@ -557,6 +525,30 @@ static bool session_auto_configure_reasoning_from_markers(lfg_session *s, const 
     std::vector<lfg_token> end_tokens;
     if (!tokenize_literal(vocab, "<think>", true, start_tokens)) return false;
     if (!tokenize_literal(vocab, "</think>", true, end_tokens)) return false;
+
+    // Prefer explicit signals (template or metadata), but fall back to marker presence
+    // so reasoning markers work with models that emit <think> without templating.
+    bool enable = false;
+    if (tmpl_str && std::strstr(tmpl_str, "<think>") != nullptr) {
+        enable = true;
+    } else {
+        char name_buf[256];
+        const int32_t n = lfg_model_get_metadata_str(s->model, "general.name", name_buf, sizeof(name_buf));
+        if (n > 0) {
+            std::string name(name_buf, (size_t)n);
+            std::transform(name.begin(), name.end(), name.begin(),
+                           [] (const std::string::value_type x) { return std::tolower(x); });
+            if (name.find("thinking") != std::string::npos || name.find("reasoning") != std::string::npos) {
+                enable = true;
+            }
+        }
+    }
+    if (!enable) {
+        // Fall back: if the vocab can represent the markers, allow auto-config.
+        // This is harmless unless the model emits <think> tokens.
+        enable = !start_tokens.empty() && !end_tokens.empty();
+    }
+    if (!enable) return false;
 
     lfg_session_configure_reasoning(s, start_tokens.data(), start_tokens.size(),
                                     end_tokens.data(), end_tokens.size());
@@ -632,14 +624,6 @@ static void session_rebuild_sampler(lfg_session *s) {
     s->prefix_sampler = lfg_sampler_init_prefix(lfg_model_get_vocab(s->model), "");
     lfg_sampler_chain_add(s->sampler, s->prefix_sampler);
 
-    if (s->config.reasoning_budget > 0 && s->reasoning_start_count > 0 && s->reasoning_end_count > 0) {
-        lfg_sampler_chain_add(s->sampler, lfg_sampler_init_reasoning_budget(
-            s->config.reasoning_budget,
-            s->reasoning_start_tokens, s->reasoning_start_count,
-            s->reasoning_end_tokens, s->reasoning_end_count
-        ));
-    }
-
     if (s->grammar_str && s->grammar_str[0] != '\0') {
         lfg_sampler *grammar_sampler = nullptr;
 
@@ -693,6 +677,8 @@ static void session_rebuild_sampler(lfg_session *s) {
             lfg_sampler_chain_add(s->sampler, lfg_sampler_init_min_p(sp->min_p, 1));
         }
     }
+
+    session_update_prefix_sampler(s);
 
     if (!is_greedy) {
         lfg_sampler_chain_add(s->sampler, lfg_sampler_init_temp(sp->temp));
@@ -1005,7 +991,6 @@ LFG_API lfg_session_config lfg_session_default_config(void) {
     cfg.n_batch = 512;
     cfg.enable_healing = false;
     cfg.structured_checkpointing = true;
-    cfg.reasoning_budget = 0;
     cfg.max_tokens = 0;
     cfg.tool_score_mode = LFG_TOOL_SCORE_OFF;
     cfg.tool_min_score = 0.0f;
@@ -1070,7 +1055,6 @@ LFG_API lfg_session * lfg_session_create(lfg_model * model, const lfg_session_co
 
     s->in_reasoning = false;
     s->reasoning_token_count = 0;
-    s->forcing_reasoning_end_index = -1;
 
     lfg_buf_u8_init(&s->healing_state_buffer, 0);
     s->healing_n_past = -1;
@@ -1296,7 +1280,6 @@ LFG_API void lfg_session_reset(lfg_session * session) {
     session->generated_count = 0;
     session->in_reasoning = false;
     session->reasoning_token_count = 0;
-    session->forcing_reasoning_end_index = -1;
     session->healing_n_past = -1;
     session->healing_state_buffer.size = 0;
     if (session->healing_sampler_snapshot) {
@@ -1709,28 +1692,7 @@ LFG_API bool lfg_session_decode(lfg_session * session) {
 LFG_API lfg_token lfg_session_sample(lfg_session * session) {
     if (!session || !session->ctx || !session->sampler) return 0;
 
-    // Reasoning budget enforcement (matches old InferenceCore::Sample)
-    if (session->in_reasoning && session->config.reasoning_budget > 0) {
-        if (session->reasoning_token_count >= (size_t)session->config.reasoning_budget) {
-            if (session->forcing_reasoning_end_index == -1) {
-                session->forcing_reasoning_end_index = 0;
-            }
-        }
-    }
-
-    // Forced reasoning end tokens always complete before max_tokens takes effect.
-    // This prevents corrupted grammar state from a mid-sequence truncation.
-    if (session->forcing_reasoning_end_index >= 0) {
-        if (session->forcing_reasoning_end_index < (int)session->reasoning_end_count) {
-            lfg_token forced = session->reasoning_end_tokens[session->forcing_reasoning_end_index];
-            session->forcing_reasoning_end_index++;
-            return forced;
-        } else {
-            session->forcing_reasoning_end_index = -1;
-        }
-    }
-
-    // Max tokens enforcement (after forced reasoning end to avoid mid-sequence truncation)
+    // Max tokens enforcement
     if (session->config.max_tokens > 0 && session->generated_count >= session->config.max_tokens) {
         return lfg_vocab_eos(lfg_model_get_vocab(session->model));
     }
@@ -3604,6 +3566,27 @@ static bool session_execute_and_continue(
     return true;
 }
 
+static bool session_is_reasoning_marker(const lfg_session *s, lfg_token token) {
+    if (!s) return false;
+    for (size_t i = 0; i < s->reasoning_start_count; ++i) {
+        if (s->reasoning_start_tokens[i] == token) return true;
+    }
+    for (size_t i = 0; i < s->reasoning_end_count; ++i) {
+        if (s->reasoning_end_tokens[i] == token) return true;
+    }
+    return false;
+}
+
+static int32_t session_token_to_piece_for_stream(
+    const lfg_session *s, const lfg_vocab *vocab, lfg_token token,
+    char *buf, int32_t length) {
+    int32_t n = lfg_token_to_piece(vocab, token, buf, length, 0, false);
+    if (n == 0 && session_is_reasoning_marker(s, token)) {
+        n = lfg_token_to_piece(vocab, token, buf, length, 0, true);
+    }
+    return n;
+}
+
 // ---------------------------------------------------------------------------
 // Generate Loop API
 // ---------------------------------------------------------------------------
@@ -3780,7 +3763,7 @@ LFG_API lfg_generate_result lfg_session_generate(
         // Token callback with stop look-ahead buffering (token + text level)
         if (stop_buf_cap > 0) {
             // Convert token to piece text
-            int32_t n = lfg_token_to_piece(vocab, tok, piece_buf, sizeof(piece_buf), 0, false);
+            int32_t n = session_token_to_piece_for_stream(session, vocab, tok, piece_buf, sizeof(piece_buf));
             if (n < 0) n = 0;
 
             // Push new token into buffer (may temporarily exceed cap)
@@ -3885,7 +3868,7 @@ LFG_API lfg_generate_result lfg_session_generate(
             if (stopped) break;
         } else if (config.token_cb && !session->in_tool_call) {
             // No buffering needed — emit directly (suppress during tool call)
-            int32_t n = lfg_token_to_piece(vocab, tok, piece_buf, sizeof(piece_buf), 0, false);
+            int32_t n = session_token_to_piece_for_stream(session, vocab, tok, piece_buf, sizeof(piece_buf));
             if (n < 0) n = 0;
             lfg_generate_action action = config.token_cb(tok, piece_buf, n, config.token_cb_data);
             if (action == LFG_GENERATE_STOP) {
@@ -4285,18 +4268,6 @@ LFG_API lfg_generate_result lfg_session_chat_generate(
     const char *tmpl_str = lfg_model_chat_template(session->model, nullptr);
     const bool auto_reasoning = session_auto_configure_reasoning_from_markers(session, tmpl_str);
 
-    // If reasoning markers are available and no explicit budget was set, apply
-    // a temporary budget proportional to max_tokens to avoid truncated outputs.
-    int32_t saved_reasoning_budget = session->config.reasoning_budget;
-    bool auto_budget = false;
-    if (session->config.reasoning_budget <= 0 &&
-        session->reasoning_start_count > 0 &&
-        session->reasoning_end_count > 0 &&
-        config.max_tokens > 0) {
-        const int32_t budget = std::max(16, config.max_tokens / 2);
-        session->config.reasoning_budget = budget;
-        auto_budget = true;
-    }
 
     // 3b. Chat-scoped surprise: compute prefix token count for context messages.
     //     Surprise should only evaluate the last user turn, not the full history.
@@ -4441,9 +4412,6 @@ LFG_API lfg_generate_result lfg_session_chat_generate(
     // 8. Generate
     lfg_generate_result out = lfg_session_generate(session, config);
 
-    if (auto_budget) {
-        session->config.reasoning_budget = saved_reasoning_budget;
-    }
 
     (void)auto_reasoning;
     return out;

@@ -106,7 +106,6 @@ ws     ::= ([ \t\n] ws)?
     config.sampling.penalty_last_n = 64;
     config.enable_healing = true;
     config.structured_checkpointing = true;
-    config.reasoning_budget = 100;
 
     lfg_session * session = lfg_session_create(model, &config);
     if (!session) { fprintf(stderr, "Failed to create session\n"); lfg_model_free(model); return 1; }
