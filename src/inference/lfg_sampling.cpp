@@ -2866,6 +2866,7 @@ static struct lfg_sampler * lfg_sampler_penalties_clone(const struct lfg_sampler
         auto * result_ctx = (lfg_sampler_penalties *) result->ctx;
 
         result_ctx->prev = ctx->prev;
+        result_ctx->token_count = ctx->token_count;
     }
 
     return result;

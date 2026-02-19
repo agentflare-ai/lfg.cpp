@@ -1,13 +1,14 @@
 model=models/lfm2-350M.gguf
 Simple Object: tokens=128
 Simple Object output={
-	                   "name" :"The Last of Us" , "age" : 13
+	                   "name" :"The Unseen" , "age" : 2007
                     }
 Integer Array: tokens=128
-Integer Array output=[2445,7 , 2231 , 2236 , 2445 , 2451 , 2456 , 2475 , 2521 , 2533 , 2553 , 2629 , 2735 , 2751 , 2775 , 2779 , 2793 , 2835 , 2851 , 2875 , 2929 , 3053 , 3091 , 3115 , 3135 , 3175 , 3253 , 3319 , 3375 , 3421 , 3453 , 3515 , 355
+Integer Array output=[2445,7 , 2231 , 2236 , 2442 , 2449 , 2453 , 2470 , 2477 , 2488 , 2491 , 2497 , 2511 , 2517 , 2523 , 2531 , 2537 , 2545 , 2563 , 2571 , 2577 , 2583 , 2591 , 2597 , 2610 , 2619 , 2623 , 2631 , 2637 , 2645 , 2653 , 2661 , 266
 Nested Structure: tokens=128
 Nested Structure output={
-	                   "user" : {"id": 1, "roles":[ "turist", "scientist", "engineer", "inventor", "naturalist", "naturalist", "naturalist", "naturalist", "naturalist", "naturalist", "naturalist", "naturalist", "naturalist", "naturalist", "naturalist", "naturalist", "naturalist", "naturalist", "naturalist", "naturalist", "naturalist",
+	                   "user" : {"id": 1, "roles":[ "turist", "inventor", "creator", "artist", "entrepreneur", "entrepreneurial entrepreneur", "innovator", "entrepreneur", "creative", "artisan", "artist", "entrepreneur", "creative", "entrepreneur", "creative", "entrepreneur", "creative", "entrepreneur", "creative", "entrepreneur",
 Mixed Types: tokens=128
 Mixed Types output={
-	                   "description" :"the most important part of the story" , "count" : 1.5 ,"status" : "warning" ,"meta" : ".  " }
+	                   "description" :"the way in which" , "count" : 1.1, "status" :"warning", "meta" : "for the purpose of" }
+

@@ -1,6 +1,6 @@
 [basic]
 token= It
-tail= It's been a while, hasn't
+tail= I've been feeling a bit down lately
 [structured]
 json={
   "answer": "```json "
@@ -17,3 +17,4 @@ healed=false
 next=ily
 [tool_call]
 json={"function": "get_stock_price", "parameters": { "symbol": "AAPL" } }
+

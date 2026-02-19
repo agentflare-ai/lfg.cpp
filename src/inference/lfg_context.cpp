@@ -2551,6 +2551,9 @@ size_t lfg_context::state_write_data(lfg_io_write_i & io) {
     const int64_t n_vocab = model.vocab.n_tokens();
     const int64_t n_embd  = model.hparams.n_embd;
 
+    // Ensure outputs are in canonical order before serializing.
+    output_reorder();
+
     // write model info
     {
         const std::string arch_str = lfg_arch_name(model.arch);
@@ -2613,6 +2616,9 @@ size_t lfg_context::state_write_data(lfg_io_write_i & io) {
 }
 
 size_t lfg_context::state_read_data(lfg_io_read_i & io) {
+    // Clear any pending swaps from previous outputs before restoring.
+    output_swaps.clear();
+
     // read model info
     {
         const std::string cur_arch_str = lfg_arch_name(model.arch);
