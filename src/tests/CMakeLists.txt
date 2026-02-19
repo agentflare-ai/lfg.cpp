@@ -111,6 +111,11 @@ target_link_libraries(test_model_capabilities PRIVATE lfg_core lfg_vision)
 target_include_directories(test_model_capabilities PRIVATE ../inference ../loader ../vision ../ggml src)
 add_test(NAME test_model_capabilities COMMAND test_model_capabilities --model ${CMAKE_SOURCE_DIR}/models/lfm2-350M.gguf)
 
+add_executable(test_guardrails test_guardrails.cpp)
+target_link_libraries(test_guardrails PRIVATE lfg_core)
+target_include_directories(test_guardrails PRIVATE ../inference ../loader ../ggml src)
+add_test(NAME test_guardrails COMMAND test_guardrails)
+
 add_test(NAME test_loader COMMAND test_loader)
 add_test(NAME test_inference COMMAND test_inference)
 add_test(NAME test_json_sampling COMMAND test_json_sampling ${CMAKE_SOURCE_DIR}/models/lfm2-350M.gguf)

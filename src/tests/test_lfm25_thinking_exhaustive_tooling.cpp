@@ -308,6 +308,8 @@ TEST_CASE("LFM2.5-1.2B-Thinking Exhaustive Tooling + Healing + Checkpointing") {
     REQUIRE(model != nullptr);
 
     lfg_session_config config = lfg_session_default_config();
+    // Ensure deterministic checkpoint restore in ReleaseFast by running single-threaded.
+    config.n_threads = 1;
     config.n_ctx = 4096;
     config.sampling.temp = 0.0f;
     config.sampling.top_k = 40;

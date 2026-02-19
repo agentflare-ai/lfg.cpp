@@ -33,8 +33,8 @@ def main() -> int:
 
     write_text(args.out_metal, merged)
 
-    asm_path = os.path.abspath(args.out_asm)
-    metal_path = os.path.abspath(args.out_metal)
+    asm_path = args.out_asm
+    metal_path = args.out_metal
 
     asm = (
         ".section __DATA,__ggml_metallib\n"

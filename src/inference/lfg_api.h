@@ -398,6 +398,39 @@ LFG_API lfg_generate_result lfg_session_chat_generate(
     const lfg_chat_message * messages, size_t n_messages,
     lfg_generate_config config);
 
+// --- Guardrails API ---
+
+typedef enum {
+    LFG_GUARDRAIL_LEVEL_NONE           = 0,
+    LFG_GUARDRAIL_LEVEL_L3_OFF         = 1,
+    LFG_GUARDRAIL_LEVEL_L2_OFF         = 2,
+    LFG_GUARDRAIL_LEVEL_RETRIEVAL_MIN  = 3,
+    LFG_GUARDRAIL_LEVEL_RETRIEVAL_OFF  = 4,
+    LFG_GUARDRAIL_LEVEL_WRITES_OFF     = 5,
+    LFG_GUARDRAIL_LEVEL_TRAINING_OFF   = 6,
+} lfg_guardrail_level;
+
+typedef struct lfg_guardrail_config {
+    bool     enabled;
+    int32_t  window_size;          // Rolling window size for percentiles (default 64)
+    float    p50_tps_min;          // Minimum p50 tokens/sec (0 = disable)
+    float    p95_latency_ms_max;   // Maximum p95 latency in ms (0 = disable)
+    size_t   memory_cap_bytes;     // Reserved for future memory guardrails (0 = disable)
+} lfg_guardrail_config;
+
+typedef struct lfg_guardrail_stats {
+    int32_t             window_size;
+    int32_t             sample_count;
+    float               p50_tps;
+    float               p95_latency_ms;
+    lfg_guardrail_level level;
+    size_t              memory_bytes;
+} lfg_guardrail_stats;
+
+LFG_API lfg_guardrail_config lfg_guardrail_default_config(void);
+LFG_API bool lfg_session_configure_guardrails(lfg_session * session, const lfg_guardrail_config * config);
+LFG_API bool lfg_session_get_guardrail_stats(lfg_session * session, lfg_guardrail_stats * out);
+
 // --- Last Formatted Prompt ---
 
 // Returns the exact text sent to the tokenizer by the last chat_generate or

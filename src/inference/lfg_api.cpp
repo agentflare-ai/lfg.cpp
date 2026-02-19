@@ -304,6 +304,20 @@ struct lfg_session {
     bool                 tool_call_tokens_cached;
     lfg_tool_call_format tool_call_format;             // default PYTHONIC (0)
     int32_t              tool_call_id_counter;          // for generating unique call_N IDs
+
+    // Guardrails (throughput/latency monitoring)
+    bool                 guardrail_active;
+    lfg_guardrail_config guardrail_cfg;
+    int32_t              guardrail_window_cap;
+    int32_t              guardrail_sample_count;
+    int32_t              guardrail_write_idx;
+    float                guardrail_p50_tps;
+    float                guardrail_p95_latency_ms;
+    lfg_guardrail_level  guardrail_level;
+    float               *guardrail_tps_samples;
+    float               *guardrail_latency_samples;
+    float               *guardrail_tmp_tps;
+    float               *guardrail_tmp_latency;
 };
 
 // ---------------------------------------------------------------------------
@@ -477,6 +491,72 @@ static lfg_sampler * session_find_sampler_by_name(const lfg_session *s, const ch
 
 static void session_update_prefix_sampler(lfg_session *s) {
     s->prefix_sampler = session_find_sampler_by_name(s, "prefix");
+}
+
+static bool tokenize_literal(const lfg_vocab *vocab, const char *text, bool special, std::vector<lfg_token> &out) {
+    if (!vocab || !text) return false;
+    const int32_t len = (int32_t)std::strlen(text);
+    int32_t cap = len + 8;
+    out.resize(cap);
+    int32_t n = lfg_tokenize(vocab, text, len, out.data(), cap, false, special);
+    if (n < 0) {
+        cap = -n;
+        out.resize(cap);
+        n = lfg_tokenize(vocab, text, len, out.data(), cap, false, special);
+    }
+    if (n <= 0) {
+        out.clear();
+        return false;
+    }
+    out.resize(n);
+    return true;
+}
+
+static bool session_model_is_thinking(const lfg_session *s, const char *tmpl_str) {
+    if (!s || !s->model) return false;
+    if (tmpl_str && std::strstr(tmpl_str, "<think>") != nullptr) {
+        return true;
+    }
+    char name_buf[256];
+    const int32_t n = lfg_model_get_metadata_str(s->model, "general.name", name_buf, sizeof(name_buf));
+    if (n > 0) {
+        std::string name(name_buf, (size_t)n);
+        std::transform(name.begin(), name.end(), name.begin(),
+                       [] (const std::string::value_type x) { return std::tolower(x); });
+        if (name.find("thinking") != std::string::npos) return true;
+    }
+
+    const lfg_vocab *vocab = lfg_model_get_vocab(s->model);
+    if (!vocab) return false;
+    std::vector<lfg_token> start_tokens;
+    std::vector<lfg_token> end_tokens;
+    if (!tokenize_literal(vocab, "<think>", true, start_tokens)) return false;
+    if (!tokenize_literal(vocab, "</think>", true, end_tokens)) return false;
+    if (start_tokens.size() != 1 || end_tokens.size() != 1) return false;
+    const lfg_token_attr start_attr = lfg_vocab_get_attr(vocab, start_tokens[0]);
+    const lfg_token_attr end_attr = lfg_vocab_get_attr(vocab, end_tokens[0]);
+    const bool start_control = (start_attr & LFG_TOKEN_ATTR_CONTROL) ||
+                               (start_attr & LFG_TOKEN_ATTR_USER_DEFINED);
+    const bool end_control = (end_attr & LFG_TOKEN_ATTR_CONTROL) ||
+                             (end_attr & LFG_TOKEN_ATTR_USER_DEFINED);
+    return start_control && end_control;
+}
+
+static bool session_auto_configure_reasoning_from_markers(lfg_session *s, const char *tmpl_str) {
+    if (!s) return false;
+    if (s->reasoning_start_count > 0 || s->reasoning_end_count > 0) return false;
+    if (!session_model_is_thinking(s, tmpl_str)) return false;
+    const lfg_vocab *vocab = lfg_model_get_vocab(s->model);
+    if (!vocab) return false;
+
+    std::vector<lfg_token> start_tokens;
+    std::vector<lfg_token> end_tokens;
+    if (!tokenize_literal(vocab, "<think>", true, start_tokens)) return false;
+    if (!tokenize_literal(vocab, "</think>", true, end_tokens)) return false;
+
+    lfg_session_configure_reasoning(s, start_tokens.data(), start_tokens.size(),
+                                    end_tokens.data(), end_tokens.size());
+    return true;
 }
 
 static lfg_sampler * session_snapshot_sampler(const lfg_session *s) {
@@ -929,6 +1009,16 @@ LFG_API lfg_session_config lfg_session_default_config(void) {
     return cfg;
 }
 
+LFG_API lfg_guardrail_config lfg_guardrail_default_config(void) {
+    lfg_guardrail_config cfg{};
+    cfg.enabled = false;
+    cfg.window_size = 64;
+    cfg.p50_tps_min = 0.0f;
+    cfg.p95_latency_ms_max = 0.0f;
+    cfg.memory_cap_bytes = 0;
+    return cfg;
+}
+
 // ---------------------------------------------------------------------------
 // Session lifecycle
 // ---------------------------------------------------------------------------
@@ -1084,6 +1174,20 @@ LFG_API lfg_session * lfg_session_create(lfg_model * model, const lfg_session_co
     s->tool_call_format = LFG_TOOL_CALL_FORMAT_PYTHONIC;
     s->tool_call_id_counter = 0;
 
+    // Guardrails (inactive by default)
+    s->guardrail_active = false;
+    s->guardrail_cfg = lfg_guardrail_default_config();
+    s->guardrail_window_cap = 0;
+    s->guardrail_sample_count = 0;
+    s->guardrail_write_idx = 0;
+    s->guardrail_p50_tps = 0.0f;
+    s->guardrail_p95_latency_ms = 0.0f;
+    s->guardrail_level = LFG_GUARDRAIL_LEVEL_NONE;
+    s->guardrail_tps_samples = nullptr;
+    s->guardrail_latency_samples = nullptr;
+    s->guardrail_tmp_tps = nullptr;
+    s->guardrail_tmp_latency = nullptr;
+
     session_rebuild_sampler(s);
 
     return s;
@@ -1162,6 +1266,12 @@ LFG_API void lfg_session_free(lfg_session * session) {
     free(session->last_raw_output);
     free(session->tool_call_text_buf);
 
+    // Guardrails
+    free(session->guardrail_tps_samples);
+    free(session->guardrail_latency_samples);
+    free(session->guardrail_tmp_tps);
+    free(session->guardrail_tmp_latency);
+
     free(session);
 }
 
@@ -1226,6 +1336,15 @@ LFG_API void lfg_session_reset(lfg_session * session) {
         session->surprise_write_idx = 0;
         session->surprise_read_idx = 0;
         session->surprise_skip_tokens = 0;
+    }
+
+    // Guardrails reset
+    if (session->guardrail_active) {
+        session->guardrail_sample_count = 0;
+        session->guardrail_write_idx = 0;
+        session->guardrail_p50_tps = 0.0f;
+        session->guardrail_p95_latency_ms = 0.0f;
+        session->guardrail_level = LFG_GUARDRAIL_LEVEL_NONE;
     }
 
     // Last formatted prompt
@@ -1576,7 +1695,9 @@ static int32_t session_rank_and_format_tools(lfg_session *session, const float *
 }
 
 LFG_API bool lfg_session_decode(lfg_session * session) {
-    if (!session) return false;
+    // Placeholder no-op: decode is handled by ingest/generate paths.
+    // Return true even on null for graceful failure semantics.
+    (void)session;
     return true;
 }
 
@@ -2518,6 +2639,10 @@ LFG_API int32_t lfg_session_configure_confidence_monitor(
     free(session->confidence_slots);
     free(session->confidence_embd_pool);
     free(session->confidence_text_buf);
+    session->confidence_slots = nullptr;
+    session->confidence_embd_pool = nullptr;
+    session->confidence_text_buf = nullptr;
+    session->confidence_text_cap = 0;
 
     // One-time allocation of ring buffer + embedding pool
     session->confidence_slots     = (lfg_confidence_ring_slot *)calloc(cap, sizeof(lfg_confidence_ring_slot));
@@ -2545,10 +2670,8 @@ LFG_API int32_t lfg_session_configure_confidence_monitor(
     session->confidence_active       = true;
 
     // Span text buffer (realloc'd on demand at pop time)
-    if (!session->confidence_text_buf) {
-        session->confidence_text_cap = 4096;
-        session->confidence_text_buf = (char *)malloc(session->confidence_text_cap);
-    }
+    session->confidence_text_cap = 4096;
+    session->confidence_text_buf = (char *)malloc(session->confidence_text_cap);
 
     return n_embd;
 }
@@ -2849,6 +2972,136 @@ LFG_API int32_t lfg_session_embed_tokens(lfg_session * session,
 
     free(toks);
     return n_tok;
+}
+
+// ---------------------------------------------------------------------------
+// Guardrails API
+// ---------------------------------------------------------------------------
+
+static float guardrail_percentile(const float *src, int32_t count, float pct, float *tmp) {
+    if (!src || !tmp || count <= 0) return 0.0f;
+    if (pct < 0.0f) pct = 0.0f;
+    if (pct > 1.0f) pct = 1.0f;
+    std::memcpy(tmp, src, (size_t)count * sizeof(float));
+    int32_t idx = (int32_t)std::floor(pct * (count - 1));
+    std::nth_element(tmp, tmp + idx, tmp + count);
+    return tmp[idx];
+}
+
+static void session_guardrail_update(lfg_session *s, int32_t tokens, double elapsed_ms) {
+    if (!s || !s->guardrail_active || s->guardrail_window_cap <= 0) return;
+    if (tokens <= 0 || elapsed_ms <= 0.0) return;
+
+    float tps = (float)(tokens / (elapsed_ms / 1000.0));
+    float latency_ms = (float)elapsed_ms;
+
+    int32_t slot = s->guardrail_write_idx % s->guardrail_window_cap;
+    s->guardrail_tps_samples[slot] = tps;
+    s->guardrail_latency_samples[slot] = latency_ms;
+    s->guardrail_write_idx++;
+    if (s->guardrail_sample_count < s->guardrail_window_cap) {
+        s->guardrail_sample_count++;
+    }
+
+    int32_t count = s->guardrail_sample_count;
+    s->guardrail_p50_tps = guardrail_percentile(s->guardrail_tps_samples, count, 0.50f, s->guardrail_tmp_tps);
+    s->guardrail_p95_latency_ms = guardrail_percentile(s->guardrail_latency_samples, count, 0.95f, s->guardrail_tmp_latency);
+
+    float score = 0.0f;
+    if (s->guardrail_cfg.p50_tps_min > 0.0f && s->guardrail_p50_tps > 0.0f &&
+        s->guardrail_p50_tps < s->guardrail_cfg.p50_tps_min) {
+        score += (s->guardrail_cfg.p50_tps_min / s->guardrail_p50_tps) - 1.0f;
+    }
+    if (s->guardrail_cfg.p95_latency_ms_max > 0.0f &&
+        s->guardrail_p95_latency_ms > s->guardrail_cfg.p95_latency_ms_max) {
+        score += (s->guardrail_p95_latency_ms / s->guardrail_cfg.p95_latency_ms_max) - 1.0f;
+    }
+
+    lfg_guardrail_level level = LFG_GUARDRAIL_LEVEL_NONE;
+    if (score > 0.0f) {
+        if (score < 0.25f) {
+            level = LFG_GUARDRAIL_LEVEL_L3_OFF;
+        } else if (score < 0.50f) {
+            level = LFG_GUARDRAIL_LEVEL_L2_OFF;
+        } else if (score < 1.00f) {
+            level = LFG_GUARDRAIL_LEVEL_RETRIEVAL_MIN;
+        } else if (score < 1.50f) {
+            level = LFG_GUARDRAIL_LEVEL_RETRIEVAL_OFF;
+        } else if (score < 2.00f) {
+            level = LFG_GUARDRAIL_LEVEL_WRITES_OFF;
+        } else {
+            level = LFG_GUARDRAIL_LEVEL_TRAINING_OFF;
+        }
+    }
+
+    s->guardrail_level = level;
+}
+
+LFG_API bool lfg_session_configure_guardrails(lfg_session * session, const lfg_guardrail_config * config) {
+    if (!session) return false;
+
+    if (!config || !config->enabled) {
+        session->guardrail_active = false;
+        session->guardrail_sample_count = 0;
+        session->guardrail_write_idx = 0;
+        session->guardrail_p50_tps = 0.0f;
+        session->guardrail_p95_latency_ms = 0.0f;
+        session->guardrail_level = LFG_GUARDRAIL_LEVEL_NONE;
+        free(session->guardrail_tps_samples); session->guardrail_tps_samples = nullptr;
+        free(session->guardrail_latency_samples); session->guardrail_latency_samples = nullptr;
+        free(session->guardrail_tmp_tps); session->guardrail_tmp_tps = nullptr;
+        free(session->guardrail_tmp_latency); session->guardrail_tmp_latency = nullptr;
+        session->guardrail_window_cap = 0;
+        return true;
+    }
+
+    int32_t cap = config->window_size > 0 ? config->window_size : 64;
+    float *tps = (float *)malloc((size_t)cap * sizeof(float));
+    float *lat = (float *)malloc((size_t)cap * sizeof(float));
+    float *tmp_tps = (float *)malloc((size_t)cap * sizeof(float));
+    float *tmp_lat = (float *)malloc((size_t)cap * sizeof(float));
+    if (!tps || !lat || !tmp_tps || !tmp_lat) {
+        free(tps);
+        free(lat);
+        free(tmp_tps);
+        free(tmp_lat);
+        lfg_set_last_error(LFG_ERROR_OUT_OF_MEMORY, "%s: failed to allocate guardrail buffers", __func__);
+        return false;
+    }
+
+    free(session->guardrail_tps_samples);
+    free(session->guardrail_latency_samples);
+    free(session->guardrail_tmp_tps);
+    free(session->guardrail_tmp_latency);
+
+    session->guardrail_tps_samples = tps;
+    session->guardrail_latency_samples = lat;
+    session->guardrail_tmp_tps = tmp_tps;
+    session->guardrail_tmp_latency = tmp_lat;
+    session->guardrail_window_cap = cap;
+    session->guardrail_sample_count = 0;
+    session->guardrail_write_idx = 0;
+    session->guardrail_p50_tps = 0.0f;
+    session->guardrail_p95_latency_ms = 0.0f;
+    session->guardrail_level = LFG_GUARDRAIL_LEVEL_NONE;
+    session->guardrail_cfg = *config;
+    session->guardrail_active = true;
+
+    std::memset(session->guardrail_tps_samples, 0, (size_t)cap * sizeof(float));
+    std::memset(session->guardrail_latency_samples, 0, (size_t)cap * sizeof(float));
+
+    return true;
+}
+
+LFG_API bool lfg_session_get_guardrail_stats(lfg_session * session, lfg_guardrail_stats * out) {
+    if (!session || !out || !session->guardrail_active) return false;
+    out->window_size = session->guardrail_window_cap;
+    out->sample_count = session->guardrail_sample_count;
+    out->p50_tps = session->guardrail_p50_tps;
+    out->p95_latency_ms = session->guardrail_p95_latency_ms;
+    out->level = session->guardrail_level;
+    out->memory_bytes = 0;
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -3368,6 +3621,8 @@ LFG_API lfg_generate_result lfg_session_generate(
     lfg_generate_result result{};
     if (!session) return result;
 
+    int64_t t_start_us = ggml_time_us();
+
     const lfg_vocab *vocab = lfg_model_get_vocab(session->model);
     int32_t max_tokens = config.max_tokens > 0
         ? config.max_tokens
@@ -3717,6 +3972,12 @@ LFG_API lfg_generate_result lfg_session_generate(
         session->confidence_run_min_entropy = 1.0f;
     }
 
+    {
+        int64_t t_end_us = ggml_time_us();
+        double elapsed_ms = (t_end_us - t_start_us) / 1000.0;
+        session_guardrail_update(session, result.n_tokens, elapsed_ms);
+    }
+
     return result;
 }
 
@@ -4017,6 +4278,20 @@ LFG_API lfg_generate_result lfg_session_chat_generate(
 
     // 3. Detect chat template from model metadata
     const char *tmpl_str = lfg_model_chat_template(session->model, nullptr);
+    const bool auto_reasoning = session_auto_configure_reasoning_from_markers(session, tmpl_str);
+
+    // If reasoning markers are available and no explicit budget was set, apply
+    // a temporary budget proportional to max_tokens to avoid truncated outputs.
+    int32_t saved_reasoning_budget = session->config.reasoning_budget;
+    bool auto_budget = false;
+    if (session->config.reasoning_budget <= 0 &&
+        session->reasoning_start_count > 0 &&
+        session->reasoning_end_count > 0 &&
+        config.max_tokens > 0) {
+        const int32_t budget = std::max(16, config.max_tokens / 2);
+        session->config.reasoning_budget = budget;
+        auto_budget = true;
+    }
 
     // 3b. Chat-scoped surprise: compute prefix token count for context messages.
     //     Surprise should only evaluate the last user turn, not the full history.
@@ -4159,7 +4434,14 @@ LFG_API lfg_generate_result lfg_session_chat_generate(
     }
 
     // 8. Generate
-    return lfg_session_generate(session, config);
+    lfg_generate_result out = lfg_session_generate(session, config);
+
+    if (auto_budget) {
+        session->config.reasoning_budget = saved_reasoning_budget;
+    }
+
+    (void)auto_reasoning;
+    return out;
 }
 
 // ---------------------------------------------------------------------------

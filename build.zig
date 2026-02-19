@@ -1050,6 +1050,7 @@ fn addTests(
         "test_confidence_monitor",
         "test_surprise_monitor",
         "test_generate_loop",
+        "test_guardrails",
         "test_structured_generate",
         "test_chat_integration",
         "test_tool_injection",
@@ -1092,6 +1093,7 @@ fn addTests(
         "src/tests/test_confidence_monitor.cpp",
         "src/tests/test_surprise_monitor.cpp",
         "src/tests/test_generate_loop.cpp",
+        "src/tests/test_guardrails.cpp",
         "src/tests/test_structured_generate.cpp",
         "src/tests/test_chat_integration.cpp",
         "src/tests/test_tool_injection.cpp",
@@ -1310,6 +1312,7 @@ fn makeFlags(
 
     c_flags.append(b.allocator, "-Wno-reserved-user-defined-literal") catch @panic("oom");
     cxx_flags.append(b.allocator, "-Wno-reserved-user-defined-literal") catch @panic("oom");
+    cxx_flags.append(b.allocator, "-Wno-deprecated-literal-operator") catch @panic("oom");
 
     if (enable_openmp) {
         c_flags.append(b.allocator, "-fopenmp") catch @panic("oom");
