@@ -425,6 +425,9 @@ struct AppState {
     bool entropy_enabled = false;
     bool confidence_enabled = false;
     bool surprise_enabled = false;
+    int32_t entropy_n_embd = 0;
+    int32_t confidence_n_embd = 0;
+    int32_t surprise_n_embd = 0;
 
     // Status bar
     float last_entropy = -1.0f;
@@ -526,6 +529,8 @@ static void surprise_callback(
     }
 
     state->surprise_log.push_back(std::move(entry));
+    state->last_surprise_count = event->n_above_threshold;
+    state->last_surprise_mean = event->mean_surprise;
 }
 
 // ---------------------------------------------------------------------------
@@ -616,6 +621,69 @@ static void confidence_callback(
     }
 
     state->confidence_log.push_back(std::move(entry));
+}
+
+// Drain queued monitor events after generation (queue-based API).
+// Note: entropy injection here is informational only; generation is already complete.
+static void drain_monitors(AppState *state) {
+    if (!state || !state->session) return;
+
+    bool entropy_enabled = false;
+    bool confidence_enabled = false;
+    bool surprise_enabled = false;
+    int32_t entropy_n_embd = 0;
+    int32_t confidence_n_embd = 0;
+    int32_t surprise_n_embd = 0;
+
+    {
+        std::lock_guard<std::mutex> lock(state->mtx);
+        entropy_enabled = state->entropy_enabled;
+        confidence_enabled = state->confidence_enabled;
+        surprise_enabled = state->surprise_enabled;
+        entropy_n_embd = state->entropy_n_embd;
+        confidence_n_embd = state->confidence_n_embd;
+        surprise_n_embd = state->surprise_n_embd;
+    }
+
+    if (entropy_enabled) {
+        std::vector<float> embd;
+        float *buf = nullptr;
+        if (entropy_n_embd > 0) {
+            embd.resize(entropy_n_embd);
+            buf = embd.data();
+        }
+        lfg_entropy_event ev;
+        while (lfg_session_entropy_pop(state->session, &ev, buf, entropy_n_embd)) {
+            const char *inject = entropy_callback(&ev, buf, state);
+            (void)inject;
+        }
+    }
+
+    if (confidence_enabled) {
+        std::vector<float> embd;
+        float *buf = nullptr;
+        if (confidence_n_embd > 0) {
+            embd.resize(confidence_n_embd);
+            buf = embd.data();
+        }
+        lfg_confidence_event ev;
+        while (lfg_session_confidence_pop(state->session, &ev, buf, confidence_n_embd)) {
+            confidence_callback(&ev, buf, state);
+        }
+    }
+
+    if (surprise_enabled) {
+        std::vector<float> embd;
+        float *buf = nullptr;
+        if (surprise_n_embd > 0) {
+            embd.resize(surprise_n_embd);
+            buf = embd.data();
+        }
+        lfg_surprise_event ev;
+        while (lfg_session_surprise_pop(state->session, &ev, buf, surprise_n_embd)) {
+            surprise_callback(&ev, buf, state);
+        }
+    }
 }
 
 
@@ -731,6 +799,9 @@ static void inference_thread_func(AppState *state) {
         }
     }
 
+    // Drain queued monitor events now that generation is complete.
+    drain_monitors(state);
+
     {
         std::lock_guard<std::mutex> lock(state->mtx);
         // Capture context input + raw output (with special tokens visible)
@@ -786,13 +857,22 @@ static void recreate_session(AppState *state) {
 
     // Configure monitors
     if (state->entropy_enabled) {
-        lfg_session_configure_entropy_monitor(state->session, &state->entropy_cfg);
+        state->entropy_n_embd =
+            lfg_session_configure_entropy_monitor(state->session, &state->entropy_cfg);
+    } else {
+        state->entropy_n_embd = 0;
     }
     if (state->confidence_enabled) {
-        lfg_session_configure_confidence_monitor(state->session, &state->confidence_cfg);
+        state->confidence_n_embd =
+            lfg_session_configure_confidence_monitor(state->session, &state->confidence_cfg);
+    } else {
+        state->confidence_n_embd = 0;
     }
     if (state->surprise_enabled) {
-        lfg_session_configure_surprise_monitor(state->session, &state->surprise_cfg);
+        state->surprise_n_embd =
+            lfg_session_configure_surprise_monitor(state->session, &state->surprise_cfg);
+    } else {
+        state->surprise_n_embd = 0;
     }
 
     // Register tools
@@ -1025,13 +1105,25 @@ static void draw_settings_panel(AppState *state) {
         // Configure monitors live on the existing session — no recreation needed
         if (monitors_changed && state->session && !state->generating) {
             if (state->entropy_enabled) {
-                lfg_session_configure_entropy_monitor(state->session, &state->entropy_cfg);
+                state->entropy_n_embd =
+                    lfg_session_configure_entropy_monitor(state->session, &state->entropy_cfg);
+            } else {
+                state->entropy_n_embd = 0;
+                lfg_session_configure_entropy_monitor(state->session, nullptr);
             }
             if (state->confidence_enabled) {
-                lfg_session_configure_confidence_monitor(state->session, &state->confidence_cfg);
+                state->confidence_n_embd =
+                    lfg_session_configure_confidence_monitor(state->session, &state->confidence_cfg);
+            } else {
+                state->confidence_n_embd = 0;
+                lfg_session_configure_confidence_monitor(state->session, nullptr);
             }
             if (state->surprise_enabled) {
-                lfg_session_configure_surprise_monitor(state->session, &state->surprise_cfg);
+                state->surprise_n_embd =
+                    lfg_session_configure_surprise_monitor(state->session, &state->surprise_cfg);
+            } else {
+                state->surprise_n_embd = 0;
+                lfg_session_configure_surprise_monitor(state->session, nullptr);
             }
         }
     }
