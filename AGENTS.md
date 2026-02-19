@@ -35,7 +35,7 @@ The project uses `zig build` as the primary build system.
 - **Filter test cases (Doctest):**
   The tests use `doctest`. You can filter specific test cases within a binary:
   ```bash
-  ./zig-out/bin/test_reasoning_gate -tc="Reasoning Budget Enforcement"
+  ./zig-out/bin/test_reasoning_gate -tc="Grammar Deferral During Reasoning"
   ```
 
 ### Benchmarks

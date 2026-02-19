@@ -54,7 +54,6 @@ typedef struct lfg_session_config {
     int n_batch;
     bool enable_healing;
     bool structured_checkpointing; // Snapshot sampler state for structured decoding.
-    int reasoning_budget;          // 0 = disabled. Number of tokens allowed for reasoning.
     int32_t max_tokens;            // 0 = unlimited. Max tokens to generate per reset cycle.
     lfg_tool_score_mode tool_score_mode;  // Tool injection gating. 0 = OFF (always inject).
     float tool_min_score;                  // Threshold value. AUTO: gap above mean. FIXED: absolute minimum.

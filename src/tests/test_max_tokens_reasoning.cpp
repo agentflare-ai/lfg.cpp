@@ -5,8 +5,27 @@
 
 #include <fstream>
 #include <vector>
+#include <cstring>
 
 static const char *MODEL_PATH = "models/LFM2.5-1.2B-Thinking-GGUF/LFM2.5-1.2B-Thinking-Q4_K_M.gguf";
+
+static bool tokenize_literal(const lfg_vocab *vocab, const char *text, std::vector<lfg_token> &out) {
+    if (!vocab || !text) return false;
+    int32_t cap = (int32_t)std::strlen(text) + 8;
+    out.resize(cap);
+    int32_t n = lfg_tokenize(vocab, text, (int32_t)std::strlen(text), out.data(), cap, false, true);
+    if (n < 0) {
+        cap = -n;
+        out.resize(cap);
+        n = lfg_tokenize(vocab, text, (int32_t)std::strlen(text), out.data(), cap, false, true);
+    }
+    if (n <= 0) {
+        out.clear();
+        return false;
+    }
+    out.resize(n);
+    return true;
+}
 
 static lfg_model *load_model() {
     std::ifstream f(MODEL_PATH);
@@ -18,7 +37,7 @@ static lfg_model *load_model() {
     return lfg_load_model(&cfg);
 }
 
-TEST_CASE("max_tokens does not interrupt forced reasoning end sequence") {
+TEST_CASE("max_tokens stops even during reasoning") {
     lfg_backend_init();
     lfg_model *model = load_model();
     if (!model) { MESSAGE("Skipping: model not found at ", MODEL_PATH); return; }
@@ -26,118 +45,41 @@ TEST_CASE("max_tokens does not interrupt forced reasoning end sequence") {
     lfg_session_config cfg = lfg_session_default_config();
     cfg.n_ctx = 1024;
     cfg.sampling.temp = 0.0f;
-    cfg.reasoning_budget = 3;  // Very short — forces end quickly
-    cfg.max_tokens = 4;        // Deliberately low so it would conflict with forced end
+    cfg.max_tokens = 4;
     lfg_session *session = lfg_session_create(model, &cfg);
     REQUIRE(session != nullptr);
 
-    // Configure reasoning tokens (<think>=32001, </think>=32002)
-    lfg_token start_tok = 32001;
-    lfg_token end_tok = 32002;
-    lfg_session_configure_reasoning(session, &start_tok, 1, &end_tok, 1);
+    std::vector<lfg_token> start_tokens;
+    std::vector<lfg_token> end_tokens;
+    if (!tokenize_literal(lfg_model_get_vocab(model), "<think>", start_tokens) ||
+        !tokenize_literal(lfg_model_get_vocab(model), "</think>", end_tokens)) {
+        MESSAGE("Skipping: reasoning markers not found in vocab");
+        lfg_session_free(session);
+        lfg_model_free(model);
+        return;
+    }
+    lfg_session_configure_reasoning(session, start_tokens.data(), start_tokens.size(),
+                                    end_tokens.data(), end_tokens.size());
 
-    // Ingest BOS + <think>
     lfg_token bos = 1;
     lfg_session_ingest_tokens(session, &bos, 1, true);
-    lfg_session_ingest_tokens(session, &start_tok, 1, true);
+    lfg_session_ingest_tokens(session, start_tokens.data(), start_tokens.size(), true);
 
     const auto *vocab = lfg_model_get_vocab(model);
     lfg_token eos = lfg_vocab_eos(vocab);
 
-    bool saw_end_token = false;
-    std::vector<lfg_token> tokens;
-
-    for (int i = 0; i < 20; ++i) {
+    bool saw_eos = false;
+    for (int i = 0; i < 10; ++i) {
         lfg_session_decode(session);
         lfg_token t = lfg_session_sample(session);
-        tokens.push_back(t);
-
-        if (t == end_tok) {
-            saw_end_token = true;
-            break;
-        }
-        if (t == eos) break;
-        lfg_session_ingest_tokens(session, &t, 1, true);
-    }
-
-    // The forced </think> end token must appear — max_tokens should not have
-    // cut it short mid-sequence.
-    CHECK(saw_end_token);
-}
-
-TEST_CASE("After forced reasoning end, max_tokens takes effect") {
-    lfg_backend_init();
-    lfg_model *model = load_model();
-    if (!model) { MESSAGE("Skipping: model not found at ", MODEL_PATH); return; }
-
-    lfg_session_config cfg = lfg_session_default_config();
-    cfg.n_ctx = 1024;
-    cfg.sampling.temp = 0.0f;
-    cfg.reasoning_budget = 2;
-    cfg.max_tokens = 5; // budget(2) + end_token(1) + at most 2 more after reasoning
-    lfg_session *session = lfg_session_create(model, &cfg);
-    REQUIRE(session != nullptr);
-
-    lfg_token start_tok = 32001;
-    lfg_token end_tok = 32002;
-    lfg_session_configure_reasoning(session, &start_tok, 1, &end_tok, 1);
-
-    lfg_token bos = 1;
-    lfg_session_ingest_tokens(session, &bos, 1, true);
-    lfg_session_ingest_tokens(session, &start_tok, 1, true);
-
-    const auto *vocab = lfg_model_get_vocab(model);
-    lfg_token eos = lfg_vocab_eos(vocab);
-
-    int total_sampled = 0;
-    for (int i = 0; i < 30; ++i) {
-        lfg_session_decode(session);
-        lfg_token t = lfg_session_sample(session);
-        total_sampled++;
-        if (t == eos) break;
-        lfg_session_ingest_tokens(session, &t, 1, true);
-    }
-
-    // max_tokens should eventually stop generation
-    // Total should be bounded by max_tokens + forced end tokens
-    CHECK(total_sampled <= cfg.max_tokens + 2); // +2 for forced end sequence slack
-}
-
-TEST_CASE("max_tokens=0 (unlimited) with reasoning budget still works") {
-    lfg_backend_init();
-    lfg_model *model = load_model();
-    if (!model) { MESSAGE("Skipping: model not found at ", MODEL_PATH); return; }
-
-    lfg_session_config cfg = lfg_session_default_config();
-    cfg.n_ctx = 1024;
-    cfg.sampling.temp = 0.0f;
-    cfg.reasoning_budget = 3;
-    cfg.max_tokens = 0; // Unlimited
-    lfg_session *session = lfg_session_create(model, &cfg);
-    REQUIRE(session != nullptr);
-
-    lfg_token start_tok = 32001;
-    lfg_token end_tok = 32002;
-    lfg_session_configure_reasoning(session, &start_tok, 1, &end_tok, 1);
-
-    lfg_token bos = 1;
-    lfg_session_ingest_tokens(session, &bos, 1, true);
-    lfg_session_ingest_tokens(session, &start_tok, 1, true);
-
-    bool saw_end_token = false;
-    for (int i = 0; i < 20; ++i) {
-        lfg_session_decode(session);
-        lfg_token t = lfg_session_sample(session);
-
-        if (t == end_tok) {
-            saw_end_token = true;
+        if (t == eos) {
+            saw_eos = true;
             break;
         }
         lfg_session_ingest_tokens(session, &t, 1, true);
     }
 
-    // Reasoning budget should still force the end token
-    CHECK(saw_end_token);
+    CHECK(saw_eos);
 
     lfg_session_free(session);
     lfg_model_free(model);

@@ -83,7 +83,6 @@ TEST_CASE("Checkpoint saves and restores reasoning_token_count") {
     lfg_session_config cfg = lfg_session_default_config();
     cfg.n_ctx = 1024;
     cfg.sampling.temp = 0.0f;
-    cfg.reasoning_budget = 50; // Large enough that we don't hit it in this test
     lfg_session *session = lfg_session_create(model, &cfg);
     REQUIRE(session != nullptr);
 

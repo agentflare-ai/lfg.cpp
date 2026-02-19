@@ -5,6 +5,7 @@
 #include <vector>
 #include <string>
 #include <fstream>
+#include <cstring>
 
 const std::string JSON_GRAMMAR = R"(
 root   ::= object
@@ -24,7 +25,34 @@ std::string token_to_str(const lfg_vocab* vocab, lfg_token token) {
     return std::string(buf, n);
 }
 
-TEST_CASE("Reasoning Gate and Budget Integration") {
+static bool tokenize_literal(const lfg_vocab *vocab, const char *text, std::vector<lfg_token> &out) {
+    if (!vocab || !text) return false;
+    int32_t cap = (int32_t)std::strlen(text) + 8;
+    out.resize(cap);
+    int32_t n = lfg_tokenize(vocab, text, (int32_t)std::strlen(text), out.data(), cap, false, true);
+    if (n < 0) {
+        cap = -n;
+        out.resize(cap);
+        n = lfg_tokenize(vocab, text, (int32_t)std::strlen(text), out.data(), cap, false, true);
+    }
+    if (n <= 0) {
+        out.clear();
+        return false;
+    }
+    out.resize(n);
+    return true;
+}
+
+static bool ends_with(const std::vector<lfg_token> &history, const std::vector<lfg_token> &pattern) {
+    if (pattern.empty() || history.size() < pattern.size()) return false;
+    size_t offset = history.size() - pattern.size();
+    for (size_t i = 0; i < pattern.size(); ++i) {
+        if (history[offset + i] != pattern[i]) return false;
+    }
+    return true;
+}
+
+TEST_CASE("Reasoning Gate and Soft Limit Integration") {
     lfg_backend_init();
 
     std::string model_path = "models/LFM2.5-1.2B-Thinking-GGUF/LFM2.5-1.2B-Thinking-Q4_K_M.gguf";
@@ -44,67 +72,32 @@ TEST_CASE("Reasoning Gate and Budget Integration") {
     const auto* vocab = lfg_model_get_vocab(model);
 
     // Tokens
-    lfg_token start_tok = 32001; // <think>
-    lfg_token end_tok = 32002;   // </think>
-
-    SUBCASE("Reasoning Budget Enforcement") {
-        lfg_session_config config = lfg_session_default_config();
-        config.n_ctx = 2048;
-        config.sampling.temp = 0.0f;
-        config.reasoning_budget = 5; // Limit reasoning to 5 tokens
-        config.enable_healing = false; 
-
-        lfg_session *session = lfg_session_create(model, &config);
-        lfg_session_configure_reasoning(session, &start_tok, 1, &end_tok, 1);
-
-        // Start with <think>
-        lfg_session_ingest_tokens(session, &start_tok, 1, true);
-
-        int count = 0;
-        bool forced_end = false;
-        for(int i=0; i<20; ++i) {
-            lfg_session_decode(session);
-            lfg_token t = lfg_session_sample(session);
-            lfg_session_ingest_tokens(session, &t, 1, true);
-            
-            MESSAGE("Token: " << t << " " << token_to_str(vocab, t));
-
-            if (t == end_tok) {
-                forced_end = true;
-                // Budget 5 means: 0,1,2,3,4 generated. 5th generated token is forced to be </think> if not already.
-                // Or rather, if count >= budget, force next.
-                // If budget is 5.
-                // Gen 1 (count=1).
-                // ...
-                // Gen 5 (count=5).
-                // Next sample sees count=5 >= budget -> Force.
-                // So 6th token is </think>.
-                CHECK(count == 5); 
-                break;
-            }
-            count++;
-        }
-        CHECK(forced_end);
-        lfg_session_free(session);
+    std::vector<lfg_token> start_tokens;
+    std::vector<lfg_token> end_tokens;
+    if (!tokenize_literal(vocab, "<think>", start_tokens) ||
+        !tokenize_literal(vocab, "</think>", end_tokens)) {
+        MESSAGE("Skipping test: reasoning markers not found in vocab");
+        lfg_model_free(model);
+        return;
     }
 
     SUBCASE("Grammar Deferral During Reasoning") {
         lfg_session_config config = lfg_session_default_config();
         config.n_ctx = 2048;
         config.sampling.temp = 0.0f; // Deterministic
-        config.reasoning_budget = 0; // Unlimited
         
         lfg_session *session = lfg_session_create(model, &config);
         
         // Configure both reasoning and grammar
-        lfg_session_configure_reasoning(session, &start_tok, 1, &end_tok, 1);
+        lfg_session_configure_reasoning(session, start_tokens.data(), start_tokens.size(),
+                                        end_tokens.data(), end_tokens.size());
         lfg_session_configure_structured(session, JSON_GRAMMAR.c_str(), "root");
 
         // Manually ingest <think> to trigger reasoning state
         // If gate works, grammar is disabled.
         // If gate fails, grammar is active -> likely fail to generate "valid" reasoning text (which is just English usually)
         // or force weird JSON tokens.
-        lfg_session_ingest_tokens(session, &start_tok, 1, true);
+        lfg_session_ingest_tokens(session, start_tokens.data(), start_tokens.size(), true);
 
         // We expect the model to generate some text. 
         // LFM2.5 thinking model should output text after <think>.
@@ -112,16 +105,19 @@ TEST_CASE("Reasoning Gate and Budget Integration") {
         
         bool non_json_generated = false;
         bool end_reasoning_found = false;
+        std::vector<lfg_token> history;
+        history.reserve(64);
 
         for(int i=0; i<20; ++i) {
             lfg_session_decode(session);
             lfg_token t = lfg_session_sample(session);
             lfg_session_ingest_tokens(session, &t, 1, true);
+            history.push_back(t);
 
             std::string s = token_to_str(vocab, t);
             MESSAGE("Reasoning Token: " << t << " " << s);
 
-            if (t == end_tok) {
+            if (ends_with(history, end_tokens)) {
                 end_reasoning_found = true;
                 break;
             }
@@ -139,7 +135,7 @@ TEST_CASE("Reasoning Gate and Budget Integration") {
         
         if (!end_reasoning_found) {
             // Force end token to test grammar re-activation
-            lfg_session_ingest_tokens(session, &end_tok, 1, true);
+            lfg_session_ingest_tokens(session, end_tokens.data(), end_tokens.size(), true);
         }
 
         // Now grammar should be active. Next token MUST be valid JSON start.

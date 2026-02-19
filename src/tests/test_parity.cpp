@@ -30,7 +30,6 @@ TEST_CASE("Parity with llama.cpp") {
     
     // Disable advanced features to match llama-simple baseline
     config.enable_healing = false;
-    config.reasoning_budget = 0;
     
     lfg_session *session = lfg_session_create(model, &config);
 
