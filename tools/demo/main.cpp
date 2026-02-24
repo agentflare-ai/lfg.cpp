@@ -22,6 +22,7 @@
 #include <vector>
 #include <atomic>
 #include <algorithm>
+#include <chrono>
 
 // ---------------------------------------------------------------------------
 // Application state (shared between main and inference thread)
@@ -403,6 +404,16 @@ struct AppState {
     lfg_model *model = nullptr;
     lfg_session *session = nullptr;
     bool model_loaded = false;
+    std::atomic<bool> model_loading{false};
+    std::atomic<bool> model_load_finished{false};
+    lfg_model *pending_model = nullptr;
+    lfg_session *pending_session = nullptr;
+    lfg_model_stats pending_model_stats = {};
+    int32_t pending_entropy_n_embd = 0;
+    int32_t pending_confidence_n_embd = 0;
+    int32_t pending_surprise_n_embd = 0;
+    std::string pending_model_log;
+    std::string pending_model_error;
     lfg_model_stats model_stats = {};
 
     // Generation
@@ -891,6 +902,67 @@ static void recreate_session(AppState *state) {
                          ", threads=" + std::to_string(state->session_cfg.n_threads) + ")\n";
 }
 
+// Poll async model loading completion and finalize on the UI thread.
+static void poll_model_load_completion(AppState *state) {
+    if (!state->model_load_finished.load()) return;
+
+    lfg_model *loaded_model = nullptr;
+    lfg_session *loaded_session = nullptr;
+    lfg_model_stats loaded_stats = {};
+    int32_t entropy_n_embd = 0;
+    int32_t confidence_n_embd = 0;
+    int32_t surprise_n_embd = 0;
+    std::string load_log;
+    std::string load_error;
+
+    {
+        std::lock_guard<std::mutex> lock(state->mtx);
+        if (!state->model_load_finished.load()) return;
+
+        state->model_load_finished.store(false);
+        loaded_model = state->pending_model;
+        loaded_session = state->pending_session;
+        loaded_stats = state->pending_model_stats;
+        entropy_n_embd = state->pending_entropy_n_embd;
+        confidence_n_embd = state->pending_confidence_n_embd;
+        surprise_n_embd = state->pending_surprise_n_embd;
+        load_log = state->pending_model_log;
+        state->pending_model = nullptr;
+        state->pending_session = nullptr;
+        state->pending_model_stats = {};
+        state->pending_entropy_n_embd = 0;
+        state->pending_confidence_n_embd = 0;
+        state->pending_surprise_n_embd = 0;
+        state->pending_model_log.clear();
+        load_error = state->pending_model_error;
+        state->pending_model_error.clear();
+    }
+
+    if (loaded_model && loaded_session) {
+        state->model = loaded_model;
+        state->session = loaded_session;
+        state->model_stats = loaded_stats;
+        state->entropy_n_embd = entropy_n_embd;
+        state->confidence_n_embd = confidence_n_embd;
+        state->surprise_n_embd = surprise_n_embd;
+        state->model_loaded = true;
+        state->needs_session_recreate = false;
+        state->log_buffer += "Model loaded. Params: " +
+            std::to_string(state->model_stats.n_params) +
+            ", vocab: " + std::to_string(state->model_stats.n_vocab) +
+            ", ctx_train: " + std::to_string(state->model_stats.n_ctx_train) + "\n";
+        state->log_buffer += "Session created (n_ctx=" + std::to_string(state->session_cfg.n_ctx) +
+                             ", threads=" + std::to_string(state->session_cfg.n_threads) + ")\n";
+        if (!load_log.empty()) {
+            state->log_buffer += load_log;
+        }
+    } else {
+        state->log_buffer += load_error.empty()
+            ? "ERROR: Failed to load model\n"
+            : (load_error + "\n");
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Helper: selectable read-only text block (supports select + copy)
 // ---------------------------------------------------------------------------
@@ -989,30 +1061,136 @@ static void draw_model_panel(AppState *state) {
         }
     }
 
-    bool can_load = !state->model_loaded && !state->generating;
-    bool can_unload = state->model_loaded && !state->generating;
+    bool can_load = !state->model_loaded && !state->model_loading.load() && !state->generating;
+    bool can_unload = state->model_loaded && !state->model_loading.load() && !state->generating;
 
     if (!can_load) ImGui::BeginDisabled();
     if (ImGui::Button("Load Model")) {
-        state->log_buffer += "Loading model: " + std::string(model_path_buf) + "...\n";
-
-        lfg_model_load_config load_cfg = lfg_model_load_default_config();
-        load_cfg.model_path = model_path_buf;
-
-        state->model = lfg_load_model(&load_cfg);
-        if (state->model) {
-            state->model_loaded = true;
-            state->model_stats = lfg_model_get_stats(state->model);
-            state->log_buffer += "Model loaded. Params: " +
-                std::to_string(state->model_stats.n_params) +
-                ", vocab: " + std::to_string(state->model_stats.n_vocab) +
-                ", ctx_train: " + std::to_string(state->model_stats.n_ctx_train) + "\n";
-
-            // Create session with current config
-            recreate_session(state);
-        } else {
-            state->log_buffer += "ERROR: Failed to load model\n";
+        const std::string model_path = model_path_buf;
+        lfg_session_config session_cfg_snapshot = {};
+        lfg_entropy_monitor_config entropy_cfg_snapshot = {};
+        lfg_confidence_monitor_config confidence_cfg_snapshot = {};
+        lfg_surprise_monitor_config surprise_cfg_snapshot = {};
+        bool entropy_enabled_snapshot = false;
+        bool confidence_enabled_snapshot = false;
+        bool surprise_enabled_snapshot = false;
+        bool tools_enabled_snapshot = false;
+        int32_t tool_top_k_snapshot = 0;
+        {
+            std::lock_guard<std::mutex> lock(state->mtx);
+            state->model_loading.store(true);
+            state->model_load_finished.store(false);
+            state->pending_model = nullptr;
+            state->pending_session = nullptr;
+            state->pending_model_stats = {};
+            state->pending_entropy_n_embd = 0;
+            state->pending_confidence_n_embd = 0;
+            state->pending_surprise_n_embd = 0;
+            state->pending_model_log.clear();
+            state->pending_model_error.clear();
+            session_cfg_snapshot = state->session_cfg;
+            entropy_cfg_snapshot = state->entropy_cfg;
+            confidence_cfg_snapshot = state->confidence_cfg;
+            surprise_cfg_snapshot = state->surprise_cfg;
+            entropy_enabled_snapshot = state->entropy_enabled;
+            confidence_enabled_snapshot = state->confidence_enabled;
+            surprise_enabled_snapshot = state->surprise_enabled;
+            tools_enabled_snapshot = state->tools_enabled;
+            tool_top_k_snapshot = state->tool_top_k;
+            state->log_buffer += "Loading model: " + model_path + "...\n";
         }
+
+        std::thread([state, model_path, session_cfg_snapshot,
+                     entropy_cfg_snapshot, confidence_cfg_snapshot, surprise_cfg_snapshot,
+                     entropy_enabled_snapshot, confidence_enabled_snapshot, surprise_enabled_snapshot,
+                     tools_enabled_snapshot, tool_top_k_snapshot]() {
+            auto t_start = std::chrono::steady_clock::now();
+            auto ms_since_start = [&]() -> double {
+                auto now = std::chrono::steady_clock::now();
+                return std::chrono::duration<double, std::milli>(now - t_start).count();
+            };
+
+            lfg_model_load_config load_cfg = lfg_model_load_default_config();
+            load_cfg.model_path = model_path.c_str();
+
+            lfg_model *loaded = lfg_load_model(&load_cfg);
+            lfg_session *loaded_session = nullptr;
+            lfg_model_stats loaded_stats = {};
+            int32_t entropy_n_embd = 0;
+            int32_t confidence_n_embd = 0;
+            int32_t surprise_n_embd = 0;
+            std::string load_log;
+            std::string load_error;
+
+            if (!loaded) {
+                load_error = "ERROR: Failed to load model";
+            } else {
+                char line[128];
+                std::snprintf(line, sizeof(line), "Stage: model loaded (%.1f ms)\n", ms_since_start());
+                load_log += line;
+
+                loaded_stats = lfg_model_get_stats(loaded);
+                loaded_session = lfg_session_create(loaded, &session_cfg_snapshot);
+                if (!loaded_session) {
+                    load_error = "ERROR: Failed to create session";
+                } else {
+                    std::snprintf(line, sizeof(line), "Stage: session created (%.1f ms)\n", ms_since_start());
+                    load_log += line;
+
+                    if (entropy_enabled_snapshot) {
+                        entropy_n_embd =
+                            lfg_session_configure_entropy_monitor(loaded_session, &entropy_cfg_snapshot);
+                    }
+                    if (confidence_enabled_snapshot) {
+                        confidence_n_embd =
+                            lfg_session_configure_confidence_monitor(loaded_session, &confidence_cfg_snapshot);
+                    }
+                    if (surprise_enabled_snapshot) {
+                        surprise_n_embd =
+                            lfg_session_configure_surprise_monitor(loaded_session, &surprise_cfg_snapshot);
+                    }
+                    if (entropy_enabled_snapshot || confidence_enabled_snapshot || surprise_enabled_snapshot) {
+                        std::snprintf(line, sizeof(line), "Stage: monitors configured (%.1f ms)\n", ms_since_start());
+                        load_log += line;
+                    }
+                    if (tools_enabled_snapshot) {
+                        int32_t n = lfg_session_register_tools(
+                            loaded_session, EXAMPLE_TOOLS, N_EXAMPLE_TOOLS, tool_top_k_snapshot);
+                        if (n > 0) {
+                            load_log += "Registered " + std::to_string(n) + " tools (top_k=" +
+                                        std::to_string(tool_top_k_snapshot) + ")\n";
+                        } else {
+                            load_log += "WARNING: Failed to register tools\n";
+                        }
+                        std::snprintf(line, sizeof(line), "Stage: tools registered (%.1f ms)\n", ms_since_start());
+                        load_log += line;
+                    }
+                }
+            }
+
+            if (!load_error.empty()) {
+                if (loaded_session) {
+                    lfg_session_free(loaded_session);
+                    loaded_session = nullptr;
+                }
+                if (loaded) {
+                    lfg_model_free(loaded);
+                    loaded = nullptr;
+                }
+            }
+
+            std::lock_guard<std::mutex> lock(state->mtx);
+            state->pending_model = loaded;
+            state->pending_session = loaded_session;
+            state->pending_model_stats = loaded_stats;
+            state->pending_entropy_n_embd = entropy_n_embd;
+            state->pending_confidence_n_embd = confidence_n_embd;
+            state->pending_surprise_n_embd = surprise_n_embd;
+            state->pending_model_log = std::move(load_log);
+            state->pending_model_error = std::move(load_error);
+            state->model_loading.store(false);
+            state->model_load_finished.store(true);
+        }).detach();
     }
     if (!can_load) ImGui::EndDisabled();
 
@@ -1036,6 +1214,10 @@ static void draw_model_panel(AppState *state) {
         state->log_buffer += "Model unloaded\n";
     }
     if (!can_unload) ImGui::EndDisabled();
+
+    if (state->model_loading.load()) {
+        ImGui::TextDisabled("Loading... UI remains responsive.");
+    }
 
     if (state->model_loaded) {
         ImGui::Text("Params: %llu", (unsigned long long)state->model_stats.n_params);
@@ -1865,9 +2047,12 @@ static void glfw_error_callback(int error, const char *description) {
 }
 
 int main(int /*argc*/, char ** /*argv*/) {
+    lfg_backend_init();
+
     glfwSetErrorCallback(glfw_error_callback);
     if (!glfwInit()) {
         fprintf(stderr, "Failed to initialize GLFW\n");
+        lfg_backend_free();
         return 1;
     }
 
@@ -1878,10 +2063,11 @@ int main(int /*argc*/, char ** /*argv*/) {
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
     const char *glsl_version = "#version 150";
 
-    GLFWwindow *window = glfwCreateWindow(1280, 800, "lfg-demo", nullptr, nullptr);
+    GLFWwindow *window = glfwCreateWindow(1080, 1080, "lfg-demo", nullptr, nullptr);
     if (!window) {
         fprintf(stderr, "Failed to create GLFW window\n");
         glfwTerminate();
+        lfg_backend_free();
         return 1;
     }
     glfwMakeContextCurrent(window);
@@ -1912,6 +2098,9 @@ int main(int /*argc*/, char ** /*argv*/) {
     // Main loop
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
+
+        // Finalize async model load (if any) on the UI thread.
+        poll_model_load_completion(&g_state);
 
         // Drain pending output — must run even after generation finishes,
         // otherwise fast models (350M) complete between frames and output is lost.
@@ -2062,6 +2251,7 @@ int main(int /*argc*/, char ** /*argv*/) {
 
     glfwDestroyWindow(window);
     glfwTerminate();
+    lfg_backend_free();
 
     return 0;
 }
