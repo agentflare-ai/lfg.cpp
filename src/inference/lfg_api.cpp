@@ -407,7 +407,9 @@ static bool session_ensure_embed_ctx(lfg_session *s) {
     lfg_context_params tparams = lfg_context_default_params();
     tparams.n_ctx = 512;
     tparams.n_batch = 512;
+    // Embedding decode is batched; keep batch-thread count aligned with session threads.
     tparams.n_threads = s->config.n_threads;
+    tparams.n_threads_batch = s->config.n_threads;
     tparams.embeddings = true;
     tparams.pooling_type = LFG_POOLING_TYPE_MEAN;
     s->tool_ctx = lfg_init_from_model(s->model, tparams);
@@ -420,7 +422,9 @@ static bool session_ensure_embed_none_ctx(lfg_session *s) {
     lfg_context_params tparams = lfg_context_default_params();
     tparams.n_ctx = 512;
     tparams.n_batch = 512;
+    // Per-token embedding path also uses batched decode internally.
     tparams.n_threads = s->config.n_threads;
+    tparams.n_threads_batch = s->config.n_threads;
     tparams.embeddings = true;
     tparams.pooling_type = LFG_POOLING_TYPE_NONE;
     s->embed_none_ctx = lfg_init_from_model(s->model, tparams);
@@ -940,6 +944,7 @@ LFG_API lfg_session * lfg_session_create(lfg_model * model, const lfg_session_co
     lfg_context_params params = lfg_context_default_params();
     params.n_ctx = cfg.n_ctx;
     params.n_threads = cfg.n_threads;
+    params.n_threads_batch = cfg.n_threads;
     params.n_batch = cfg.n_batch;
 
     lfg_context *ctx = lfg_init_from_model(model, params);
