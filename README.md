@@ -1,12 +1,16 @@
 # lfg.cpp
 
-A session-centric C inference engine for GGUF language models. Built on a vendored `ggml` backend with a pure C11 API, lfg.cpp moves the generate loop, tool execution, and monitor signal production into the engine so consumers avoid wiring decode/sample/repeat loops by hand.
+`lfg.cpp` is a session-centric C inference engine for Liquid AI's Liquid Foundation Models (LFMs) distributed in GGUF format. Built on a vendored `ggml` backend with a pure C11 API, it moves the generate loop, tool execution, and monitor signal production into the engine so consumers do not need to wire decode, sample, and replay loops by hand.
 
 The repository is licensed under Apache 2.0. Bundled third-party components remain under their own licenses; see [THIRD_PARTY.md](THIRD_PARTY.md) and [NOTICE](NOTICE).
 
+## Model Compatibility
+
+`lfg.cpp` is intended for Liquid Foundation Models. GGUF is the packaging format, not the compatibility target, so broader support for arbitrary GGUF language models should not be assumed.
+
 ## What makes it different
 
-**The generate loop lives in the engine, not in your code.** Most inference libraries expose low-level context + batch primitives and leave the generate loop, chat templating, stop sequence handling, and token stitching to the caller. lfg.cpp wraps all of that behind opaque session handles:
+**The generate loop lives in the engine, not in your code.** Most inference libraries expose low-level context and batch primitives, then leave the generate loop, chat templating, stop-sequence handling, and token stitching to the caller. `lfg.cpp` wraps that behind opaque session handles:
 
 ```c
 lfg_chat_message messages[] = {
@@ -20,9 +24,9 @@ gen.token_cb = my_streaming_callback;
 lfg_generate_result result = lfg_session_chat_generate(session, messages, 2, gen);
 ```
 
-Three levels of abstraction — `lfg_session_generate` (raw state), `lfg_session_prompt_generate` (text), and `lfg_session_chat_generate` (chat template) — so you pick the level you need without reimplementing the rest.
+Three levels of abstraction are available: `lfg_session_generate` (raw state), `lfg_session_prompt_generate` (text), and `lfg_session_chat_generate` (chat template). Consumers can choose the right level without reimplementing the rest of the stack.
 
-**RAG signals are computed during generation, not after.** Most RAG systems are bolted on top: generate the full response, then decide if you should have retrieved something. lfg.cpp computes entropy, surprise, and confidence *as tokens are sampled*, and can act on them mid-generation:
+**RAG signals are computed during generation, not after.** Most RAG systems are bolted on top: generate the full response, then decide whether retrieval should have happened. `lfg.cpp` computes entropy, surprise, and confidence *as tokens are sampled*, and can act on them mid-generation:
 
 | Signal | Monitor | Meaning | RAG action |
 |---|---|---|---|
@@ -30,11 +34,11 @@ Three levels of abstraction — `lfg_session_generate` (raw state), `lfg_session
 | High surprise input | Surprise | Input contains novel info | **Store** input |
 | Low entropy output | Confidence | Model is confident about this span | **Store** output |
 
-All three monitors produce mean-pooled, L2-normalized embeddings alongside their events — ready for vector similarity search with no additional embedding calls. Entropy events include a rewind checkpoint: when the model is uncertain at token N, callers can pop the event, run retrieval, call `lfg_session_rewind()`, inject context, and continue from that exact point. No re-encoding of everything before N. The signal detection itself happens in the hot loop; policy/orchestration remains caller-controlled.
+All three monitors produce mean-pooled, L2-normalized embeddings alongside their events, ready for vector similarity search with no additional embedding calls. Entropy events include a rewind checkpoint: when the model is uncertain at token `N`, callers can pop the event, run retrieval, call `lfg_session_rewind()`, inject context, and continue from that exact point. No re-encoding of everything before `N` is required. Signal detection happens in the hot loop; policy and orchestration remain caller-controlled.
 
-**Tool execution doesn't break the KV cache.** Most tool-calling implementations generate, stop, parse the tool call, execute, rebuild the entire prompt with the result, and re-encode everything from scratch. lfg.cpp appends the tool result as a continuation directly into the existing KV cache and resumes generation. For a 2K-token conversation, that's 2K tokens you don't re-encode per tool round. The engine handles the full cycle — embedding-based ranking, prompt injection of top-K tools, structured parsing, callback execution, result injection, and continuation — across multiple rounds without session resets.
+**Tool execution does not break the KV cache.** Most tool-calling implementations generate, stop, parse the tool call, execute it, rebuild the entire prompt with the result, and re-encode everything from scratch. `lfg.cpp` appends the tool result as a continuation directly into the existing KV cache and resumes generation. For a 2K-token conversation, that avoids re-encoding 2K tokens per tool round. The engine handles the full cycle, including embedding-based ranking, prompt injection of top-K tools, structured parsing, callback execution, result injection, and continuation, across multiple rounds without session resets.
 
-**Structured output is reasoning-aware.** Grammar constraints (GBNF or JSON Schema) are automatically suspended inside `<think>...</think>` blocks so the model reasons freely, then constrained output resumes. A reasoning soft-limit sampler biases `</think>` after a configurable token threshold (no hard cap).
+**Structured output is reasoning-aware.** Grammar constraints (GBNF or JSON Schema) are automatically suspended inside `<think>...</think>` blocks so the model can reason freely before constrained output resumes. A reasoning soft-limit sampler biases `</think>` after a configurable token threshold rather than enforcing a hard cap.
 
 ## Why it's fast
 
