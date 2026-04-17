@@ -1,0 +1,13 @@
+lfg.cpp
+Copyright 2026 lfg.cpp contributors
+
+This product includes software and source material developed by third parties.
+
+Included notices:
+- Portions of the codebase are derived from or vendored from ggml-org/llama.cpp and ggml, which are distributed under the MIT License.
+- The interactive demo vendors Dear ImGui, distributed under the MIT License.
+- The test suite vendors doctest, distributed under the MIT License with bundled Boost Software License notices in upstream source.
+- The vision stack includes stb_image, available under either the MIT License or the public domain.
+- Some SYCL backend files include material under Apache-2.0 WITH LLVM-exception in addition to upstream MIT notices.
+
+See THIRD_PARTY.md and the license files embedded in vendored components for details.

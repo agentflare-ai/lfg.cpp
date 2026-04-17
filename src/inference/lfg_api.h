@@ -337,6 +337,11 @@ typedef enum { LFG_GENERATE_CONTINUE = 0, LFG_GENERATE_STOP = 1 } lfg_generate_a
 typedef lfg_generate_action (*lfg_generate_token_cb)(
     lfg_token token, const char * piece, int32_t piece_len, void * user_data);
 
+// Optional live entropy hook. Called after sampling, before token ingest.
+// Return non-NULL text to rewind to the event checkpoint and inject context.
+typedef const char *(*lfg_generate_entropy_cb)(
+    const lfg_entropy_event * event, const float * embedding, void * user_data);
+
 typedef struct lfg_generate_config {
     int32_t  max_tokens;          // Hard token limit. 0 = use session config.
 
@@ -348,6 +353,11 @@ typedef struct lfg_generate_config {
     // Streaming callback (nullable — NULL means no callback)
     lfg_generate_token_cb      token_cb;
     void                     * token_cb_data;
+
+    // Live entropy interception (nullable — NULL means caller can consume
+    // entropy events later via lfg_session_entropy_pop()).
+    lfg_generate_entropy_cb    entropy_cb;
+    void                     * entropy_cb_data;
 
     // Auto tool execution (observational callback + round limit)
     lfg_tool_call_cb           tool_call_cb;       // nullable, fired after each auto-executed tool call
@@ -365,7 +375,7 @@ typedef enum {
 
 typedef struct lfg_generate_result {
     int32_t          n_tokens;            // Tokens generated
-    int32_t          n_retrievals;        // Reserved (always 0). Retrieval is caller-orchestrated via entropy_pop.
+    int32_t          n_retrievals;        // Live entropy rewinds/injections performed during generation.
     int32_t          n_confidence_spans;  // Reserved (always 0). Consume confidence events via confidence_pop.
     int32_t          n_surprise_events;   // Reserved (always 0). Consume surprise events via surprise_pop.
     int32_t          n_tool_calls;        // Number of parsed tool calls (0 if none or non-tool-call stop)

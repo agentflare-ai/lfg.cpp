@@ -403,6 +403,20 @@ static char * tool_format_json(const lfg_tool_desc *tool, int32_t *out_len) {
     return buf;
 }
 
+// Build semantic ranking text for a tool.
+// We intentionally exclude parameters/schema to reduce JSON boilerplate noise.
+static std::string tool_format_rank_text(const lfg_tool_desc *tool) {
+    const char *name = tool && tool->name ? tool->name : "";
+    const char *desc = tool && tool->description ? tool->description : "";
+    std::string out;
+    out.reserve(std::strlen(name) + std::strlen(desc) + 32);
+    out += "name: ";
+    out += name;
+    out += "\ndescription: ";
+    out += desc;
+    return out;
+}
+
 static void l2_normalize(float *vec, int n) {
     float sum = 0.0f;
     for (int i = 0; i < n; ++i) sum += vec[i] * vec[i];
@@ -2251,7 +2265,11 @@ LFG_API int32_t lfg_session_register_tools(lfg_session * session,
             entry.fn_user_data = tools[i].fn_user_data;
             total_json_bytes += json_len;
 
-            uint64_t hash = fnv1a_hash(entry.json_text, json_len);
+            // Semantic ranking is based on name + description only.
+            std::string rank_text = tool_format_rank_text(&tools[i]);
+            const char *rank_ptr = rank_text.c_str();
+            int32_t rank_len = (int32_t)rank_text.size();
+            uint64_t hash = fnv1a_hash(rank_ptr, (size_t)rank_len);
 
             // Token cost
             if (json_len + 16 > tok_scratch_cap) {
@@ -2271,11 +2289,11 @@ LFG_API int32_t lfg_session_register_tools(lfg_session * session,
                 // Compute embedding via tool_ctx
                 lfg_memory_clear(lfg_get_memory(session->tool_ctx), true);
 
-                if (json_len + 16 > tok_scratch_cap) {
-                    tok_scratch_cap = json_len + 16;
+                if (rank_len + 16 > tok_scratch_cap) {
+                    tok_scratch_cap = rank_len + 16;
                     tok_scratch = (lfg_token *)realloc(tok_scratch, tok_scratch_cap * sizeof(lfg_token));
                 }
-                int32_t n_emb_tok = lfg_tokenize(vocab, entry.json_text, json_len,
+                int32_t n_emb_tok = lfg_tokenize(vocab, rank_ptr, rank_len,
                                                   tok_scratch, tok_scratch_cap, true, false);
 
                 entry.embedding = (float *)calloc(n_embd, sizeof(float));
@@ -3597,6 +3615,8 @@ LFG_API lfg_generate_config lfg_generate_default_config(void) {
     cfg.include_history_reasoning = false;
     cfg.token_cb = nullptr;
     cfg.token_cb_data = nullptr;
+    cfg.entropy_cb = nullptr;
+    cfg.entropy_cb_data = nullptr;
     cfg.tool_call_cb = nullptr;
     cfg.tool_call_cb_data = nullptr;
     cfg.max_tool_rounds = 0;
@@ -3678,6 +3698,65 @@ LFG_API lfg_generate_result lfg_session_generate(
     for (int32_t i = 0; i < tokens_remaining; ++i) {
         lfg_session_decode(session);
         lfg_token tok = lfg_session_sample(session);
+
+        // Optional live entropy hook: rewind + inject before the sampled token
+        // is committed to output or ingested into the KV cache.
+        if (config.entropy_cb && session->entropy_active) {
+            lfg_entropy_event ev{};
+            std::vector<float> embd_buf;
+            float *embd_ptr = nullptr;
+
+            if (session->entropy_n_embd > 0) {
+                embd_buf.resize(session->entropy_n_embd);
+                embd_ptr = embd_buf.data();
+            }
+
+            bool restarted_from_entropy = false;
+            while (lfg_session_entropy_pop(session, &ev, embd_ptr, session->entropy_n_embd)) {
+                const char *inject = config.entropy_cb(
+                    &ev, ev.n_embd > 0 ? embd_ptr : nullptr, config.entropy_cb_data);
+                if (!inject || inject[0] == '\0') {
+                    continue;
+                }
+
+                if (!lfg_session_rewind(session, ev.checkpoint_id)) {
+                    continue;
+                }
+
+                restarted_from_entropy = true;
+
+                int32_t inject_len = (int32_t)std::strlen(inject);
+                int32_t tok_cap = inject_len + 16;
+                lfg_token *inject_toks = (lfg_token *)malloc(tok_cap * sizeof(lfg_token));
+                int32_t n_inject = lfg_tokenize(
+                    vocab, inject, inject_len, inject_toks, tok_cap, false, false);
+
+                if (n_inject < 0) {
+                    tok_cap = -n_inject;
+                    inject_toks = (lfg_token *)realloc(inject_toks, tok_cap * sizeof(lfg_token));
+                    n_inject = lfg_tokenize(
+                        vocab, inject, inject_len, inject_toks, tok_cap, false, false);
+                }
+
+                if (n_inject > 0) {
+                    bool ok = lfg_session_ingest_tokens(session, inject_toks, n_inject, false);
+                    if (ok) {
+                        result.n_retrievals++;
+                    }
+                }
+
+                free(inject_toks);
+                lfg_session_entropy_flush(session);
+                if (restarted_from_entropy) {
+                    i--;
+                    break;
+                }
+            }
+
+            if (restarted_from_entropy) {
+                continue;
+            }
+        }
 
         // Accumulate raw output (with special tokens) for tool call parsing
         {

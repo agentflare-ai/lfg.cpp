@@ -1,7 +1,0 @@
-node_modules/
-.idea/
-dist/
-.astro/
-__pycache__/
-.env.local.DS_Store
-.DS_Store

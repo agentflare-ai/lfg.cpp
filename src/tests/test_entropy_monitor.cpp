@@ -562,6 +562,132 @@ TEST_CASE("Integration: Entropy-triggered retrieval changes output") {
     }
 }
 
+TEST_CASE("Integration: Generate callback injects retrieval context") {
+    lfg_model *model = get_1_2b();
+    if (!model) { MESSAGE("Skipping: 1.2B model not found"); return; }
+
+    int32_t n_embd = lfg_model_n_embd(model);
+    const char *facts[] = {
+        "The Eiffel Tower is 330 meters tall and was completed in 1889 for the World's Fair in Paris, France.",
+        "The speed of light in vacuum is exactly 299,792,458 meters per second.",
+        "Mount Everest has an elevation of 8,849 meters above sea level, located in the Himalayas.",
+        "The Pacific Ocean covers approximately 165.25 million square kilometers, making it the largest ocean.",
+        "DNA was first identified by Friedrich Miescher in 1869, and its double helix structure was discovered by Watson and Crick in 1953.",
+    };
+    constexpr int N_FACTS = 5;
+
+    const char *prompt = "Tell me about the Eiffel Tower and how tall it is.\n";
+    int32_t prompt_len = (int32_t)std::strlen(prompt);
+
+    struct cb_data { std::string output; };
+    auto token_cb = [](lfg_token, const char *piece, int32_t piece_len, void *ud) -> lfg_generate_action {
+        auto *d = (cb_data *)ud;
+        d->output.append(piece, piece_len);
+        return LFG_GENERATE_CONTINUE;
+    };
+
+    // Baseline
+    std::string output_baseline;
+    {
+        lfg_session_config config = lfg_session_default_config();
+        config.n_ctx = 2048;
+        config.sampling.temp = 0.0f;
+        lfg_session *session = lfg_session_create(model, &config);
+        REQUIRE(session != nullptr);
+
+        cb_data data;
+        lfg_generate_config gcfg = lfg_generate_default_config();
+        gcfg.max_tokens = 80;
+        gcfg.token_cb = token_cb;
+        gcfg.token_cb_data = &data;
+
+        lfg_session_prompt_generate(session, prompt, prompt_len, true, gcfg);
+        output_baseline = data.output;
+        MESSAGE("Baseline: " << output_baseline);
+
+        lfg_session_free(session);
+    }
+
+    // With live entropy callback retrieval
+    std::string output_retrieval;
+    int retrievals = 0;
+    {
+        lfg_session_config config = lfg_session_default_config();
+        config.n_ctx = 2048;
+        config.sampling.temp = 0.0f;
+        lfg_session *session = lfg_session_create(model, &config);
+        REQUIRE(session != nullptr);
+
+        auto kb = build_kb(session, facts, N_FACTS, n_embd);
+        REQUIRE((int)kb.size() == N_FACTS);
+
+        struct retrieval_state {
+            const std::vector<kb_entry> *kb;
+            int32_t n_embd;
+            int max_retrievals;
+            int issued = 0;
+            std::string inject;
+        } rstate{&kb, n_embd, 2};
+
+        auto entropy_cb = [](const lfg_entropy_event *event, const float *embedding, void *ud) -> const char * {
+            auto *state = (retrieval_state *)ud;
+            if (!event || !embedding || state->issued >= state->max_retrievals) {
+                return nullptr;
+            }
+
+            int best_idx = -1;
+            float best_score = -1.0f;
+            for (int i = 0; i < (int)state->kb->size(); ++i) {
+                float score = cosine_similarity(
+                    embedding, (*state->kb)[i].embedding.data(), state->n_embd);
+                if (score > best_score) {
+                    best_score = score;
+                    best_idx = i;
+                }
+            }
+
+            if (best_idx < 0 || best_score <= 0.0f) {
+                return nullptr;
+            }
+
+            state->inject = " ";
+            state->inject += (*state->kb)[best_idx].text;
+            state->inject += " ";
+            state->issued++;
+            return state->inject.c_str();
+        };
+
+        lfg_entropy_monitor_config ecfg = lfg_entropy_monitor_default_config();
+        ecfg.threshold = 0.05f;
+        ecfg.cooldown_tokens = 16;
+        ecfg.ring_size = 4;
+        REQUIRE(lfg_session_configure_entropy_monitor(session, &ecfg));
+
+        cb_data data;
+        lfg_generate_config gcfg = lfg_generate_default_config();
+        gcfg.max_tokens = 80;
+        gcfg.token_cb = token_cb;
+        gcfg.token_cb_data = &data;
+        gcfg.entropy_cb = entropy_cb;
+        gcfg.entropy_cb_data = &rstate;
+
+        lfg_generate_result result = lfg_session_prompt_generate(session, prompt, prompt_len, true, gcfg);
+        output_retrieval = data.output;
+        retrievals = result.n_retrievals;
+        MESSAGE("With live retrieval (" << retrievals << " retrievals): " << output_retrieval);
+
+        lfg_session_free(session);
+    }
+
+    if (retrievals > 0) {
+        CHECK(!output_retrieval.empty());
+        CHECK_MESSAGE(output_retrieval != output_baseline,
+                      "Expected different output after live retrieval injection");
+    } else {
+        MESSAGE("No retrievals triggered — entropy stayed below threshold with greedy sampling");
+    }
+}
+
 TEST_CASE("Integration: Embed API produces valid embeddings") {
     lfg_model *model = get_1_2b();
     if (!model) { MESSAGE("Skipping: 1.2B model not found"); return; }

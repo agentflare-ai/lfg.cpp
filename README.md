@@ -1,6 +1,8 @@
 # lfg.cpp
 
-A session-centric C inference engine for GGUF language models. Built on a vendored `ggml` backend with a pure C11 API, lfg.cpp moves the generate loop, tool execution, and monitor signal production into the engine — so consumers avoid wiring decode/sample/repeat loops by hand.
+A session-centric C inference engine for GGUF language models. Built on a vendored `ggml` backend with a pure C11 API, lfg.cpp moves the generate loop, tool execution, and monitor signal production into the engine so consumers avoid wiring decode/sample/repeat loops by hand.
+
+The repository is licensed under Apache 2.0. Bundled third-party components remain under their own licenses; see [THIRD_PARTY.md](THIRD_PARTY.md) and [NOTICE](NOTICE).
 
 ## What makes it different
 
@@ -48,7 +50,7 @@ All three monitors produce mean-pooled, L2-normalized embeddings alongside their
 
 **KV cache rewind instead of replay.** When an entropy event is popped and the caller decides to inject context, the engine truncates the KV cache to the trigger position and re-encodes only the injected text plus the few tokens after the trigger. It doesn't replay the entire sequence from the beginning. If truncation fails (some backends don't support partial removal), it falls back to full replay — but on Metal and CPU backends, truncation works and saves substantial compute.
 
-**ISA-specific builds with no runtime dispatch.** The dist libraries ship per-ISA: avx2, avx512, amx on x86; dotprod, i8mm on ARM. The consumer picks the right one for their hardware. No runtime dispatch overhead, no lowest-common-denominator codegen. The Zig build system cross-compiles all five platform targets from a single machine.
+**ISA-specific builds with no runtime dispatch.** Release artifacts can be generated per ISA: avx2, avx512, amx on x86; dotprod, i8mm on ARM. The consumer picks the right one for their hardware. No runtime dispatch overhead, no lowest-common-denominator codegen. The Zig build system cross-compiles all five platform targets from a single machine.
 
 ## Features
 
@@ -64,7 +66,7 @@ All three monitors produce mean-pooled, L2-normalized embeddings alongside their
 - **Stop sequences** — token-level sequences and encoding-independent text-level stop strings
 - **Vision** — integrated CLIP and SigLIP encoders
 - **Zero-allocation hot path** — all buffers pre-allocated; no heap allocations during generation
-- **Cross-platform** — prebuilt static/shared libraries for macOS, Linux, Windows with ISA variants
+- **Cross-platform** — build static/shared libraries for macOS, Linux, and Windows with ISA variants
 
 ## Quick start
 
@@ -135,9 +137,9 @@ zig build -Ddemo=true -Doptimize=ReleaseFast
 | `-Dall_targets` | true | Cross-compile for all supported platforms |
 | `-Ddemo` | false | Build the ImGui demo application |
 
-### Prebuilt libraries
+### Release artifacts
 
-The `dist/` directory contains prebuilt static and shared libraries:
+Release libraries are generated into `dist/lib/`:
 
 | Platform | Architecture | ISA variants |
 |---|---|---|
@@ -147,7 +149,7 @@ The `dist/` directory contains prebuilt static and shared libraries:
 | Windows | aarch64 | baseline, dotprod |
 | Windows | x86_64 | baseline, avx2, avx512, amx |
 
-Rebuild dist libraries:
+Build release libraries:
 ```bash
 zig build -p dist -Dbaseline_combined=true -Disa_combined=true \
     -Dall_targets=true -Doptimize=ReleaseFast --cache-dir /tmp/fresh
@@ -322,7 +324,6 @@ src/
   eval/               # Evaluation tools
   benchmarks/         # Performance benchmarks
 tools/demo/           # ImGui interactive demo
-dist/                 # Prebuilt libraries for all platforms
 build.zig             # Zig build configuration
 ```
 
@@ -499,4 +500,6 @@ zig build test -Dall_targets=false                      # Run all tests
 
 ## License
 
-See [LICENSE](LICENSE) for details.
+lfg.cpp is licensed under the Apache License 2.0. See [LICENSE](LICENSE).
+
+The repository includes vendored and embedded third-party components under their own licenses, including MIT, public-domain or dual-licensed headers, and Apache-2.0-with-LLVM-exception components. See [NOTICE](NOTICE) and [THIRD_PARTY.md](THIRD_PARTY.md) for the curated attribution list.

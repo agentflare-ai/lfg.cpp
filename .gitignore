@@ -4,6 +4,8 @@ out/
 bin/
 zig-out/
 .zig-cache/
+dist_tmp/
+dist_tmp_host/
 
 # CMake
 CMakeCache.txt
@@ -27,6 +29,12 @@ Makefile
 !dist/*.so
 !dist/*.dylib
 !dist/*.dll
+!dist/lib/
+!dist/lib/*.a
+!dist/lib/*.lib
+!dist/lib/*.so
+!dist/lib/*.dylib
+!dist/lib/*.dll
 
 # Executables
 liquidgen
@@ -37,6 +45,11 @@ liquidgen
 .idea/
 *.swp
 *~
+.agent/
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+imgui.ini
 
 # OS
 .DS_Store
@@ -51,4 +64,7 @@ compile_commands.json
 .snapshot/
 *.bak
 *.diff
+*.plan.md
+dummy.wav
+image.png
 test_models/*.gguf

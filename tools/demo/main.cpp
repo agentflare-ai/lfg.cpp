@@ -439,6 +439,7 @@ struct AppState {
     int32_t entropy_n_embd = 0;
     int32_t confidence_n_embd = 0;
     int32_t surprise_n_embd = 0;
+    bool monitors_reconfigure_pending = false;
 
     // Status bar
     float last_entropy = -1.0f;
@@ -732,6 +733,7 @@ static void inference_thread_func(AppState *state) {
     // Build message array from chat history
     std::vector<ChatMessage> msgs_copy;
     lfg_generate_config gen_cfg;
+    bool use_live_entropy = false;
     {
         std::lock_guard<std::mutex> lock(state->mtx);
         msgs_copy = state->messages;
@@ -743,6 +745,12 @@ static void inference_thread_func(AppState *state) {
         // Auto tool execution: tool_call_observer logs to Tools tab
         gen_cfg.tool_call_cb = tool_call_observer;
         gen_cfg.tool_call_cb_data = state;
+        use_live_entropy = state->entropy_enabled;
+    }
+
+    if (use_live_entropy) {
+        gen_cfg.entropy_cb = entropy_callback;
+        gen_cfg.entropy_cb_data = state;
     }
 
     // Convert to lfg_chat_message array.
@@ -793,10 +801,14 @@ static void inference_thread_func(AppState *state) {
         int32_t needed = lfg_session_rank_tools(state->session,
             rank_query.c_str(), (int32_t)rank_query.size(), nullptr, 0);
         if (needed > 0) {
-            rank_output.resize(needed);
-            lfg_session_rank_tools(state->session,
+            // Allocate +1 for NUL terminator required by C API.
+            std::vector<char> rank_buf((size_t)needed + 1);
+            int32_t written = lfg_session_rank_tools(state->session,
                 rank_query.c_str(), (int32_t)rank_query.size(),
-                &rank_output[0], needed + 1);
+                rank_buf.data(), (int32_t)rank_buf.size());
+            if (written > 0) {
+                rank_output.assign(rank_buf.data(), (size_t)written);
+            }
         }
     }
 
@@ -811,6 +823,7 @@ static void inference_thread_func(AppState *state) {
     }
 
     // Drain queued monitor events now that generation is complete.
+    // Entropy events are consumed live when the demo enables the entropy hook.
     drain_monitors(state);
 
     {
@@ -1252,11 +1265,37 @@ static void draw_settings_panel(AppState *state) {
             changed = true;
         }
         changed |= ImGui::SliderFloat("Temperature", &state->sampling_cfg.temp, 0.0f, 2.0f);
-        changed |= ImGui::SliderInt("Top K", &state->sampling_cfg.top_k, 0, 200);
+        changed |= ImGui::SliderInt("Top K##sampling_top_k", &state->sampling_cfg.top_k, 0, 200);
         changed |= ImGui::SliderFloat("Top P", &state->sampling_cfg.top_p, 0.0f, 1.0f);
         changed |= ImGui::SliderFloat("Min P", &state->sampling_cfg.min_p, 0.0f, 0.5f);
         changed |= ImGui::SliderFloat("Repeat Penalty", &state->sampling_cfg.penalty_repeat, 1.0f, 2.0f);
     }
+
+    auto apply_monitors = [&]() {
+        if (!state->session || state->generating) return false;
+        if (state->entropy_enabled) {
+            state->entropy_n_embd =
+                lfg_session_configure_entropy_monitor(state->session, &state->entropy_cfg);
+        } else {
+            state->entropy_n_embd = 0;
+            lfg_session_configure_entropy_monitor(state->session, nullptr);
+        }
+        if (state->confidence_enabled) {
+            state->confidence_n_embd =
+                lfg_session_configure_confidence_monitor(state->session, &state->confidence_cfg);
+        } else {
+            state->confidence_n_embd = 0;
+            lfg_session_configure_confidence_monitor(state->session, nullptr);
+        }
+        if (state->surprise_enabled) {
+            state->surprise_n_embd =
+                lfg_session_configure_surprise_monitor(state->session, &state->surprise_cfg);
+        } else {
+            state->surprise_n_embd = 0;
+            lfg_session_configure_surprise_monitor(state->session, nullptr);
+        }
+        return true;
+    };
 
     if (ImGui::CollapsingHeader("Monitors")) {
         bool monitors_changed = false;
@@ -1284,29 +1323,21 @@ static void draw_settings_panel(AppState *state) {
             ImGui::Unindent();
         }
 
-        // Configure monitors live on the existing session — no recreation needed
-        if (monitors_changed && state->session && !state->generating) {
-            if (state->entropy_enabled) {
-                state->entropy_n_embd =
-                    lfg_session_configure_entropy_monitor(state->session, &state->entropy_cfg);
+        // Configure monitors live on the existing session — no recreation needed.
+        // If changed while generating, defer and auto-apply once generation stops.
+        if (monitors_changed) {
+            if (!apply_monitors()) {
+                state->monitors_reconfigure_pending = true;
             } else {
-                state->entropy_n_embd = 0;
-                lfg_session_configure_entropy_monitor(state->session, nullptr);
+                state->monitors_reconfigure_pending = false;
             }
-            if (state->confidence_enabled) {
-                state->confidence_n_embd =
-                    lfg_session_configure_confidence_monitor(state->session, &state->confidence_cfg);
-            } else {
-                state->confidence_n_embd = 0;
-                lfg_session_configure_confidence_monitor(state->session, nullptr);
-            }
-            if (state->surprise_enabled) {
-                state->surprise_n_embd =
-                    lfg_session_configure_surprise_monitor(state->session, &state->surprise_cfg);
-            } else {
-                state->surprise_n_embd = 0;
-                lfg_session_configure_surprise_monitor(state->session, nullptr);
-            }
+        }
+    }
+
+    // Apply deferred monitor config once generation completes.
+    if (state->monitors_reconfigure_pending && !state->generating) {
+        if (apply_monitors()) {
+            state->monitors_reconfigure_pending = false;
         }
     }
 
@@ -1316,7 +1347,7 @@ static void draw_settings_panel(AppState *state) {
         }
         if (state->tools_enabled) {
             ImGui::Indent();
-            if (ImGui::SliderInt("Top K", &state->tool_top_k, 1, 12)) {
+            if (ImGui::SliderInt("Top K##tools_top_k", &state->tool_top_k, 1, 12)) {
                 changed = true;
             }
             static const char *score_modes[] = {"Off", "Auto", "Fixed"};
