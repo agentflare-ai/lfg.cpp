@@ -15,6 +15,8 @@ set(LFG_SANITIZERS "address,undefined" CACHE STRING "Sanitizers to enable when L
 option(LFG_BUILD_FUZZERS "Build libFuzzer targets" OFF)
 set(LFG_FUZZ_SANITIZERS "address,undefined" CACHE STRING "Sanitizers to enable for fuzzers")
 
+option(LFG_BUILD_DEMO "Build the macOS ImGui demo application" OFF)
+
 include(GNUInstallDirs)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
@@ -35,6 +37,26 @@ FetchContent_Declare(
     GIT_TAG        v1.12.0
 )
 FetchContent_MakeAvailable(spdlog)
+
+if(LFG_BUILD_DEMO)
+    if(NOT APPLE)
+        message(FATAL_ERROR "LFG_BUILD_DEMO is only supported on macOS.")
+    endif()
+
+    enable_language(OBJC)
+
+    set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+    set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
+
+    FetchContent_Declare(
+        glfw
+        URL https://github.com/glfw/glfw/releases/download/3.4/glfw-3.4.zip
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    )
+    FetchContent_MakeAvailable(glfw)
+endif()
 
 # Optimization and architecture flags (apply globally)
 if(CMAKE_COMPILER_IS_GNUCC OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -130,9 +152,10 @@ file(GLOB INFERENCE_SOURCES
 # Model Loader Source
 file(GLOB LOADER_SOURCES "src/loader/*.cpp")
 
-
-
-
+set(LFG_COMMON_SOURCES
+    third_party/llama.cpp/common/peg-parser.cpp
+    third_party/llama.cpp/common/unicode.cpp
+)
 
 # New Vision Sources (Refactored)
 set(VISION_SOURCES
@@ -161,6 +184,7 @@ target_link_libraries(lfg_vision PUBLIC lfg_ggml spdlog::spdlog_header_only)
 add_library(lfg_core STATIC
     ${INFERENCE_SOURCES}
     ${LOADER_SOURCES}
+    ${LFG_COMMON_SOURCES}
 )
 
 # Apply strict warnings only to our code
@@ -178,6 +202,58 @@ if(CMAKE_COMPILER_IS_GNUCC OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     target_compile_options(lfg_cli PRIVATE ${LFG_STRICT_WARNINGS})
 endif()
 target_link_libraries(lfg_cli PRIVATE lfg_core spdlog::spdlog_header_only)
+
+if(LFG_BUILD_DEMO)
+    add_library(lfg_imgui STATIC
+        third_party/imgui/imgui.cpp
+        third_party/imgui/imgui_demo.cpp
+        third_party/imgui/imgui_draw.cpp
+        third_party/imgui/imgui_tables.cpp
+        third_party/imgui/imgui_widgets.cpp
+        third_party/imgui/backends/imgui_impl_glfw.cpp
+        third_party/imgui/backends/imgui_impl_opengl3.cpp
+    )
+    target_include_directories(lfg_imgui PUBLIC
+        third_party/imgui
+        third_party/imgui/backends
+        ${glfw_SOURCE_DIR}/include
+    )
+    if(CMAKE_COMPILER_IS_GNUCC OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        target_compile_options(lfg_imgui PRIVATE -w)
+    endif()
+    target_link_libraries(lfg_imgui PUBLIC glfw)
+
+    find_library(APPKIT_FRAMEWORK AppKit REQUIRED)
+    find_library(UNIFORM_TYPE_IDENTIFIERS_FRAMEWORK UniformTypeIdentifiers REQUIRED)
+    find_library(OPENGL_FRAMEWORK OpenGL REQUIRED)
+
+    add_executable(lfg_demo
+        tools/demo/main.cpp
+        tools/demo/file_dialog.m
+    )
+    set_target_properties(lfg_demo PROPERTIES OUTPUT_NAME lfg-demo)
+    set_source_files_properties(
+        tools/demo/file_dialog.m
+        PROPERTIES COMPILE_OPTIONS "-fno-objc-arc;-Wno-deprecated-declarations"
+    )
+    target_include_directories(lfg_demo PRIVATE
+        tools/demo
+        third_party/imgui
+        third_party/imgui/backends
+        ${glfw_SOURCE_DIR}/include
+    )
+    if(CMAKE_COMPILER_IS_GNUCC OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        target_compile_options(lfg_demo PRIVATE ${LFG_STRICT_WARNINGS})
+    endif()
+    target_link_libraries(lfg_demo PRIVATE
+        lfg_core
+        lfg_imgui
+        glfw
+        ${APPKIT_FRAMEWORK}
+        ${UNIFORM_TYPE_IDENTIFIERS_FRAMEWORK}
+        ${OPENGL_FRAMEWORK}
+    )
+endif()
 
 
 add_subdirectory(src/eval)

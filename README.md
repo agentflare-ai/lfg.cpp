@@ -105,7 +105,24 @@ int main(void) {
 
 ## Building
 
-The project uses the **Zig build system** for cross-compilation. The implementation is C++17 internally; the public API is C11.
+The project ships both a local **CMake** build and a **Zig** build for cross-compilation. The implementation is C++17 internally; the public API is C11.
+
+For local development:
+
+```bash
+cmake -S . -B build
+cmake --build build -j
+```
+
+To build the macOS desktop demo with CMake:
+
+```bash
+cmake -S . -B build -DLFG_BUILD_DEMO=ON
+cmake --build build --target lfg_demo -j
+./build/bin/lfg-demo
+```
+
+For release artifact generation and multi-target packaging, use Zig:
 
 ```bash
 # Build everything
@@ -307,6 +324,14 @@ The `tools/demo/` directory contains a full-featured ImGui desktop application s
 - **Memory** — in-memory vector DB viewer with stored entries and retrieval log
 
 The demo implements a complete in-memory vector DB using the three-signal RAG system with 13 working tool callbacks.
+
+```bash
+cmake -S . -B build -DLFG_BUILD_DEMO=ON
+cmake --build build --target lfg_demo -j
+./build/bin/lfg-demo
+```
+
+Zig remains available for the same app when you want the original cross-platform packaging flow:
 
 ```bash
 zig build -Ddemo=true -Doptimize=ReleaseFast
