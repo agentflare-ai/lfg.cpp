@@ -349,6 +349,9 @@ typedef struct lfg_generate_config {
     bool     include_history_reasoning;  // false (default) = strip <think>...</think>
                                          // from assistant messages in history.
                                          // Saves context for multi-turn chat.
+    bool     include_output_embeddings;  // false (default). If true, generation
+                                         // stores per-token embeddings in the
+                                         // returned result.
 
     // Streaming callback (nullable — NULL means no callback)
     lfg_generate_token_cb      token_cb;
@@ -381,6 +384,10 @@ typedef struct lfg_generate_result {
     int32_t          n_tool_calls;        // Number of parsed tool calls (0 if none or non-tool-call stop)
     int32_t          n_tool_rounds;       // Auto-execution rounds completed (0 if no auto-execution)
     lfg_stop_reason  stop_reason;         // Why generation stopped
+    const float     *output_embeddings;   // Session-owned flat [n_output_embedding_floats], valid until next generate/reset/free
+    int32_t          n_output_embedding_floats;
+    int32_t          n_output_embedding_tokens;
+    int32_t          output_embedding_size;
 } lfg_generate_result;
 
 // Default generate config (max_tokens=0, token/tool callbacks NULL).

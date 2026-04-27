@@ -132,6 +132,44 @@ TEST_CASE("lfg_session_generate - token callback receives pieces") {
     teardown(&env);
 }
 
+TEST_CASE("lfg_session_generate - can return output embeddings") {
+    test_env env;
+    if (!setup(&env)) {
+        MESSAGE("Skipping: model not available");
+        return;
+    }
+
+    ingest_prompt(&env, "The capital of France is");
+
+    lfg_generate_config gc = lfg_generate_default_config();
+    gc.max_tokens = 8;
+    gc.include_output_embeddings = true;
+
+    lfg_generate_result r = lfg_session_generate(env.session, gc);
+
+    MESSAGE("Generated ", r.n_tokens, " tokens with ",
+            r.n_output_embedding_tokens, " embedded output tokens");
+    CHECK(r.n_tokens > 0);
+    CHECK(r.output_embeddings != nullptr);
+    CHECK(r.n_output_embedding_tokens > 0);
+    CHECK(r.n_output_embedding_tokens <= r.n_tokens);
+    CHECK(r.output_embedding_size == lfg_model_n_embd_out(env.model));
+    CHECK(r.n_output_embedding_floats ==
+          r.n_output_embedding_tokens * r.output_embedding_size);
+
+    for (int32_t i = 0; i < r.n_output_embedding_tokens; ++i) {
+        const float *embd = r.output_embeddings + i * r.output_embedding_size;
+        float norm_sq = 0.0f;
+        for (int32_t j = 0; j < r.output_embedding_size; ++j) {
+            norm_sq += embd[j] * embd[j];
+        }
+        CHECK(norm_sq > 0.99f);
+        CHECK(norm_sq < 1.01f);
+    }
+
+    teardown(&env);
+}
+
 TEST_CASE("lfg_session_generate - callback can stop generation") {
     test_env env;
     if (!setup(&env)) {
@@ -139,7 +177,7 @@ TEST_CASE("lfg_session_generate - callback can stop generation") {
         return;
     }
 
-    ingest_prompt(&env, "Count to one hundred: 1, 2, 3, 4");
+    ingest_prompt(&env, "Repeat this sequence with more words: alpha beta gamma");
 
     int stop_after = 5;
 

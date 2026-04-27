@@ -294,6 +294,11 @@ struct lfg_session {
     char                *last_raw_output;             // detokenized with special=true
     int32_t              last_raw_output_len;
     int32_t              last_raw_output_cap;
+    float               *last_output_embeddings;      // flat per-generated-token embeddings
+    int32_t              last_output_embeddings_len;
+    int32_t              last_output_embeddings_cap;
+    int32_t              last_output_embedding_tokens;
+    int32_t              last_output_embedding_size;
     char                *tool_call_text_buf;           // accumulator during generation
     int32_t              tool_call_text_len;
     int32_t              tool_call_text_cap;
@@ -1167,6 +1172,11 @@ LFG_API lfg_session * lfg_session_create(lfg_model * model, const lfg_session_co
     s->last_raw_output = (char *)malloc(2048);
     s->last_raw_output_len = 0;
     s->last_raw_output_cap = 2048;
+    s->last_output_embeddings = nullptr;
+    s->last_output_embeddings_len = 0;
+    s->last_output_embeddings_cap = 0;
+    s->last_output_embedding_tokens = 0;
+    s->last_output_embedding_size = 0;
     s->tool_call_text_buf = (char *)malloc(1024);
     s->tool_call_text_len = 0;
     s->tool_call_text_cap = 1024;
@@ -1267,6 +1277,7 @@ LFG_API void lfg_session_free(lfg_session * session) {
     session_free_tool_calls(session);
     free(session->parsed_tool_calls);
     free(session->last_raw_output);
+    free(session->last_output_embeddings);
     free(session->tool_call_text_buf);
 
     // Guardrails
@@ -1357,6 +1368,9 @@ LFG_API void lfg_session_reset(lfg_session * session) {
     // Tool call parsing reset
     session_free_tool_calls(session);
     session->last_raw_output_len = 0;
+    session->last_output_embeddings_len = 0;
+    session->last_output_embedding_tokens = 0;
+    session->last_output_embedding_size = 0;
     session->tool_call_text_len = 0;
     session->in_tool_call = false;
     session->tool_call_id_counter = 0;
@@ -3484,6 +3498,40 @@ static void session_ensure_raw_output_cap(lfg_session * s, int32_t needed) {
     s->last_raw_output_cap = cap;
 }
 
+static void session_reset_output_embeddings(lfg_session * s) {
+    s->last_output_embeddings_len = 0;
+    s->last_output_embedding_tokens = 0;
+    s->last_output_embedding_size = 0;
+}
+
+static void session_ensure_output_embeddings_cap(lfg_session * s, int32_t needed) {
+    if (needed <= s->last_output_embeddings_cap) return;
+    int32_t cap = s->last_output_embeddings_cap > 0 ? s->last_output_embeddings_cap : 1024;
+    while (cap < needed) cap *= 2;
+    s->last_output_embeddings = (float *)realloc(s->last_output_embeddings, cap * sizeof(float));
+    s->last_output_embeddings_cap = cap;
+}
+
+static void session_append_latest_output_embedding(lfg_session * s) {
+    const int32_t n_embd = lfg_model_n_embd_out(s->model);
+    if (n_embd <= 0) return;
+
+    float *src = lfg_get_embeddings_ith(s->ctx, -1);
+    if (!src) return;
+
+    if (s->last_output_embedding_size == 0) {
+        s->last_output_embedding_size = n_embd;
+    }
+    if (s->last_output_embedding_size != n_embd) return;
+
+    session_ensure_output_embeddings_cap(s, s->last_output_embeddings_len + n_embd);
+    float *dst = s->last_output_embeddings + s->last_output_embeddings_len;
+    std::memcpy(dst, src, n_embd * sizeof(float));
+    l2_normalize(dst, n_embd);
+    s->last_output_embeddings_len += n_embd;
+    s->last_output_embedding_tokens++;
+}
+
 // ---------------------------------------------------------------------------
 // Auto tool execution helpers
 // ---------------------------------------------------------------------------
@@ -3613,6 +3661,7 @@ LFG_API lfg_generate_config lfg_generate_default_config(void) {
     lfg_generate_config cfg{};
     cfg.max_tokens = 0;
     cfg.include_history_reasoning = false;
+    cfg.include_output_embeddings = false;
     cfg.token_cb = nullptr;
     cfg.token_cb_data = nullptr;
     cfg.entropy_cb = nullptr;
@@ -3642,8 +3691,14 @@ LFG_API lfg_generate_result lfg_session_generate(
     // Clear previous tool call state
     session_free_tool_calls(session);
     session->last_raw_output_len = 0;
+    session_reset_output_embeddings(session);
     session->tool_call_text_len = 0;
     session->in_tool_call = false;
+
+    const bool capture_output_embeddings = config.include_output_embeddings;
+    if (capture_output_embeddings) {
+        lfg_set_embeddings(session->ctx, true);
+    }
 
     // Lazy-cache tool call start/end token IDs (always — model can emit tool
     // calls even without registered tools, e.g. via chat template)
@@ -3934,6 +3989,7 @@ LFG_API lfg_generate_result lfg_session_generate(
                         stop_buf[0].piece_len, config.token_cb_data);
                     if (action == LFG_GENERATE_STOP) {
                         result.stop_reason = LFG_STOP_CALLBACK;
+                        total_tokens += i + 1;
                         stopped = true;
                         break;
                     }
@@ -3952,12 +4008,16 @@ LFG_API lfg_generate_result lfg_session_generate(
             lfg_generate_action action = config.token_cb(tok, piece_buf, n, config.token_cb_data);
             if (action == LFG_GENERATE_STOP) {
                 result.stop_reason = LFG_STOP_CALLBACK;
+                total_tokens += i + 1;
                 stopped = true;
                 break;
             }
         }
 
-        lfg_session_ingest_tokens(session, &tok, 1, false);
+        bool ingested = lfg_session_ingest_tokens(session, &tok, 1, false);
+        if (ingested && capture_output_embeddings) {
+            session_append_latest_output_embedding(session);
+        }
     }
 
     // Flush remaining buffered tokens on non-EOS stop (max_tokens)
@@ -3968,6 +4028,7 @@ LFG_API lfg_generate_result lfg_session_generate(
                 stop_buf[j].piece_len, config.token_cb_data);
             if (action == LFG_GENERATE_STOP) {
                 result.stop_reason = LFG_STOP_CALLBACK;
+                total_tokens += tokens_remaining;
                 stopped = true;
                 break;
             }
@@ -4004,6 +4065,7 @@ LFG_API lfg_generate_result lfg_session_generate(
             stop_buf_count = 0;
             session->in_tool_call = false;
             session->last_raw_output_len = 0;
+            session_reset_output_embeddings(session);
             session->tool_call_text_len = 0;
             session_free_tool_calls(session);
             result.n_tool_calls = 0;
@@ -4016,6 +4078,12 @@ LFG_API lfg_generate_result lfg_session_generate(
     } // while (auto_continue)
 
     result.n_tokens = total_tokens;
+    if (capture_output_embeddings && session->last_output_embeddings_len > 0) {
+        result.output_embeddings = session->last_output_embeddings;
+        result.n_output_embedding_floats = session->last_output_embeddings_len;
+        result.n_output_embedding_tokens = session->last_output_embedding_tokens;
+        result.output_embedding_size = session->last_output_embedding_size;
+    }
 
     // Post-loop: flush any in-progress confidence run as a final event
     if (session->confidence_active &&
@@ -4043,6 +4111,10 @@ LFG_API lfg_generate_result lfg_session_generate(
         int64_t t_end_us = ggml_time_us();
         double elapsed_ms = (t_end_us - t_start_us) / 1000.0;
         session_guardrail_update(session, result.n_tokens, elapsed_ms);
+    }
+
+    if (capture_output_embeddings) {
+        lfg_set_embeddings(session->ctx, false);
     }
 
     return result;
